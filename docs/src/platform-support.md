@@ -23,6 +23,7 @@ The `rust-gpu` project currently supports a limited number of platforms and grap
 | SPIR-V | 1.3+ | Primary |
 | Vulkan | 1.1+ | Primary |
 | WGPU | 0.6 | Primary | Uses a translation layer to Metal/DX12
+| OpenCL | 1.2+ | Secondary | Kernel execution model with Physical64 addressing
 |  OpenGL | ??? | Tertiary |
 
 ### SPIR-V Targets
