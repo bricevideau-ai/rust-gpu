@@ -732,10 +732,13 @@ impl<'tcx> CodegenCx<'tcx> {
         // locations, but the "client API" Vulkan doesn't describe any use-case for them, or at least none I'm aware of.
         // A quick scour through the spec revealed that `VK_KHR_dynamic_rendering_local_read` may need this, and while
         // we don't support it yet (I assume), I'll just keep it here in case it becomes useful in the future.
-        let has_location = matches!(
-            storage_class,
-            Ok(StorageClass::Input | StorageClass::Output | StorageClass::UniformConstant)
-        );
+        // Location decorations require the Shader capability and are not valid
+        // for Kernel entry points. Skip them entirely for Kernel execution model.
+        let has_location = execution_model != ExecutionModel::Kernel
+            && matches!(
+                storage_class,
+                Ok(StorageClass::Input | StorageClass::Output | StorageClass::UniformConstant)
+            );
         let mut assign_location = |var_id: Result<Word, &str>, explicit: Option<u32>| {
             let storage_class = storage_class.unwrap();
             let location = decoration_locations
