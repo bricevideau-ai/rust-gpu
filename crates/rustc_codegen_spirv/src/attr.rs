@@ -876,6 +876,15 @@ fn parse_entry_attrs(
                 ));
             }
         }
+        Kernel => {
+            // OpenCL kernels may optionally specify a local size; if omitted,
+            // the work-group size is set at dispatch time by the host API.
+            if let Some(local_size) = local_size {
+                entry
+                    .execution_modes
+                    .push((LocalSize, ExecutionModeExtra::new(local_size)));
+            }
+        }
         //TODO: Cover more defaults
         _ => {}
     }
