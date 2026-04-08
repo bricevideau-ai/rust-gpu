@@ -3,87 +3,56 @@
 // compile-flags: -C target-feature=+Groups
 
 // Test Kernel-mode subgroup operations using the Groups capability
-// and OpGroup* instructions (valid for Kernel execution model).
-//
-// The Groups capability uses OpGroupAll, OpGroupAny, OpGroupIAdd, etc.
-// which are distinct from Vulkan's GroupNonUniform* capabilities.
+// and the spirv_std::arch::group_* API.
 
+use spirv_std::arch;
 use spirv_std::spirv;
 
-// OpGroupAll — true if predicate is true for all invocations in the subgroup.
 #[spirv(kernel(threads(32)))]
 pub fn test_group_all(#[spirv(cross_workgroup)] out: &mut u32) {
-    let result: u32;
-    unsafe {
-        core::arch::asm!(
-            "%bool = OpTypeBool",
-            "%uint = OpTypeInt 32 0",
-            "%subgroup = OpConstant %uint 3",
-            "%true = OpConstantTrue %bool",
-            "%one = OpConstant %uint 1",
-            "%zero = OpConstant %uint 0",
-            "%pred = OpGroupAll %bool %subgroup %true",
-            "{result} = OpSelect %uint %pred %one %zero",
-            result = out(reg) result,
-        );
-    }
-    *out = result;
+    *out = arch::group_all(true) as u32;
 }
 
-// OpGroupAny — true if predicate is true for any invocation in the subgroup.
 #[spirv(kernel(threads(32)))]
 pub fn test_group_any(#[spirv(cross_workgroup)] out: &mut u32) {
-    let result: u32;
-    unsafe {
-        core::arch::asm!(
-            "%bool = OpTypeBool",
-            "%uint = OpTypeInt 32 0",
-            "%subgroup = OpConstant %uint 3",
-            "%true = OpConstantTrue %bool",
-            "%one = OpConstant %uint 1",
-            "%zero = OpConstant %uint 0",
-            "%pred = OpGroupAny %bool %subgroup %true",
-            "{result} = OpSelect %uint %pred %one %zero",
-            result = out(reg) result,
-        );
-    }
-    *out = result;
+    *out = arch::group_any(true) as u32;
 }
 
-// OpGroupBroadcast — broadcast value from local_id to all invocations.
 #[spirv(kernel(threads(32)))]
 pub fn test_group_broadcast(#[spirv(cross_workgroup)] out: &mut u32, value: u32) {
-    let result: u32;
-    unsafe {
-        core::arch::asm!(
-            "%uint = OpTypeInt 32 0",
-            "%subgroup = OpConstant %uint 3",
-            "%zero = OpConstant %uint 0",
-            "{result} = OpGroupBroadcast %uint %subgroup {value} %zero",
-            value = in(reg) value,
-            result = out(reg) result,
-        );
-    }
-    *out = result;
+    *out = arch::group_broadcast_u32(value, 0);
 }
 
-// OpGroupIAdd — integer reduction across the subgroup.
 #[spirv(kernel(threads(32)))]
 pub fn test_group_iadd_reduce(#[spirv(cross_workgroup)] out: &mut u32, value: u32) {
-    let result: u32;
-    unsafe {
-        core::arch::asm!(
-            "%uint = OpTypeInt 32 0",
-            "%subgroup = OpConstant %uint 3",
-            "{result} = OpGroupIAdd %uint %subgroup Reduce {value}",
-            value = in(reg) value,
-            result = out(reg) result,
-        );
-    }
-    *out = result;
+    *out = arch::group_i_add(value);
 }
 
-// Subgroup builtins.
+#[spirv(kernel(threads(32)))]
+pub fn test_group_iadd_inclusive(#[spirv(cross_workgroup)] out: &mut u32, value: u32) {
+    *out = arch::group_inclusive_i_add(value);
+}
+
+#[spirv(kernel(threads(32)))]
+pub fn test_group_iadd_exclusive(#[spirv(cross_workgroup)] out: &mut u32, value: u32) {
+    *out = arch::group_exclusive_i_add(value);
+}
+
+#[spirv(kernel(threads(32)))]
+pub fn test_group_fadd_reduce(#[spirv(cross_workgroup)] out: &mut f32, value: f32) {
+    *out = arch::group_f_add(value);
+}
+
+#[spirv(kernel(threads(32)))]
+pub fn test_group_umin(#[spirv(cross_workgroup)] out: &mut u32, value: u32) {
+    *out = arch::group_u_min(value);
+}
+
+#[spirv(kernel(threads(32)))]
+pub fn test_group_fmax(#[spirv(cross_workgroup)] out: &mut f32, value: f32) {
+    *out = arch::group_f_max(value);
+}
+
 #[spirv(kernel(threads(32)))]
 pub fn test_subgroup_builtins(
     #[spirv(cross_workgroup)] out: &mut u32,
