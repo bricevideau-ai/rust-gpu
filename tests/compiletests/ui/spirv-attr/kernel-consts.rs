@@ -54,5 +54,12 @@ pub fn test_const_fold_div(#[spirv(cross_workgroup)] out: &mut u32) {
     *out = 100 / 3;
 }
 
-// NOTE: &'static references require StorageClass.Private which needs the
-// Shader capability. This is a known gap for Kernel targets.
+#[inline(never)]
+fn scalar_load(r: &'static u32) -> u32 {
+    *r
+}
+
+#[spirv(kernel)]
+pub fn test_static_ref(#[spirv(cross_workgroup)] out: &mut u32) {
+    *out = scalar_load(&123);
+}
