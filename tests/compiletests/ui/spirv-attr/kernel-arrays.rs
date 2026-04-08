@@ -36,9 +36,21 @@ pub fn test_array_write(#[spirv(cross_workgroup)] out: &mut u32) {
     *out = array[0] + array[1];
 }
 
-// NOTE: Dynamic array indexing (array[i] where i is a variable) currently
-// fails on Physical64 due to mixed u32/u64 types in pointer arithmetic.
-// Static-index access (array[0], array[1], etc.) works fine.
+#[spirv(kernel)]
+pub fn test_array_loop(#[spirv(cross_workgroup)] out: &mut u32) {
+    let array = [1u32, 2, 3, 4, 5];
+    let mut sum = 0u32;
+    for i in 0..5 {
+        sum += array[i];
+    }
+    *out = sum;
+}
+
+#[spirv(kernel)]
+pub fn test_array_dyn_index(#[spirv(cross_workgroup)] out: &mut u32, i: u32) {
+    let array = [10u32, 20, 30, 40];
+    *out = array[i as usize];
+}
 
 #[spirv(kernel)]
 pub fn test_array_param(#[spirv(cross_workgroup)] out: &mut u32) {

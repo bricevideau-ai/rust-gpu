@@ -16,13 +16,13 @@ pub fn test_panic_simple() {
     panic!("kernel panic");
 }
 
-// NOTE: Dynamic array indexing (x[i]) fails on Physical64 due to mixed
-// u32/u64 types in pointer arithmetic. Use static indices for now.
+fn array_bounds_check(x: [u32; 4], i: usize) -> u32 {
+    x[i]
+}
 
 #[spirv(kernel)]
-pub fn test_array_static_index(#[spirv(cross_workgroup)] out: &mut u32) {
-    let x = [10u32, 20, 30, 40];
-    *out = x[2];
+pub fn test_bounds_check(#[spirv(cross_workgroup)] out: &mut u32) {
+    *out = array_bounds_check([10, 20, 30, 40], 2);
 }
 
 #[spirv(kernel)]
