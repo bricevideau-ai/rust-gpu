@@ -988,6 +988,10 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         // isn't really supported (and will error if actually used from a shader).
         //
         // FIXME(eddyb) supersede via SPIR-T pointer legalization (e.g. `qptr`).
+        // FIXME(Kerilk) for Physical addressing (Kernel/OpenCL), this should
+        // be legal — but the linker specializer currently can't handle
+        // OpPtrAccessChain or OpConvertPtrToU/OpConvertUToPtr without
+        // inference conflicts on composite types containing Generic pointers.
         trace!("ptr_offset_strided: falling back to (illegal) `OpPtrAccessChain`");
 
         let result_ptr = if is_inbounds {
@@ -2022,9 +2026,21 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         // "first index" (which acts as `<*T>::offset` aka "pointer arithmetic").
         if let &[ptr_base_index, structured_index] = indices
             && self.builder.lookup_const_scalar(ptr_base_index) == Some(0)
-            && let SpirvType::Array { element, .. } | SpirvType::RuntimeArray { element, .. } =
-                self.lookup_type(ty)
         {
+            let element = match self.lookup_type(ty) {
+                SpirvType::Array { element, .. } | SpirvType::RuntimeArray { element, .. } => {
+                    element
+                }
+                // For Kernel targets, [T] is the element type directly (no
+                // RuntimeArray), so ty is already the element type.
+                _ if self
+                    .builder
+                    .has_capability(rspirv::spirv::Capability::Kernel) =>
+                {
+                    ty
+                }
+                _ => return self.maybe_inbounds_gep(ty, ptr, indices, true),
+            };
             return self.maybe_inbounds_gep(element, ptr, &[structured_index], true);
         }
 
