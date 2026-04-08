@@ -55,10 +55,30 @@ impl TargetSpecVersion {
     /// format the target spec json
     pub fn format_spec(&self, target: &SpirvTarget) -> String {
         let target_env = target.env();
+        // OpenCL targets use Physical64 addressing with 64-bit pointers.
+        let is_opencl = target_env.starts_with("opencl");
+        let (data_layout, pointer_width_raw) = if is_opencl {
+            (
+                "e-m:e-p:64:64:64-i64:64-n8:16:32:64",
+                64_u32,
+            )
+        } else {
+            (
+                "e-m:e-p:32:32:32-i64:64-n8:16:32:64",
+                32_u32,
+            )
+        };
         let (extra, target_pointer_width) = match self {
-            TargetSpecVersion::Rustc_1_76_0 => (r#""os": "unknown","#, "\"32\""),
-            TargetSpecVersion::Rustc_1_85_0 => (r#""crt-static-respected": true,"#, "\"32\""),
-            TargetSpecVersion::Rustc_1_93_0 => (r#""crt-static-respected": true,"#, "32"),
+            TargetSpecVersion::Rustc_1_76_0 => {
+                (r#""os": "unknown","#, format!("\"{pointer_width_raw}\""))
+            }
+            TargetSpecVersion::Rustc_1_85_0 => (
+                r#""crt-static-respected": true,"#,
+                format!("\"{pointer_width_raw}\""),
+            ),
+            TargetSpecVersion::Rustc_1_93_0 => {
+                (r#""crt-static-respected": true,"#, format!("{pointer_width_raw}"))
+            }
         };
         format!(
             r#"{{
@@ -66,7 +86,7 @@ impl TargetSpecVersion {
   "arch": "spirv",
   "crt-objects-fallback": "false",
   "crt-static-allows-dylibs": true,
-  "data-layout": "e-m:e-p:32:32:32-i64:64-n8:16:32:64",
+  "data-layout": "{data_layout}",
   "dll-prefix": "",
   "dll-suffix": ".spv.json",
   "dynamic-linking": true,
