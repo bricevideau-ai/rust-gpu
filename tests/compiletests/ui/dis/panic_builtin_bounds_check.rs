@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "panic_builtin_bounds_check"]
 
 // Test that bounds checking panics get converted to `debugPrintf` correctly.

@@ -1,5 +1,7 @@
 // Tests using a vector like pointer at `const` time.
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 #![feature(ptr_internals)]
 

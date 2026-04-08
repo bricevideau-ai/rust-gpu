@@ -2,6 +2,8 @@
 // compile-flags: -C target-feature=+GroupNonUniform,+GroupNonUniformArithmetic,+ext:SPV_KHR_vulkan_memory_model
 // compile-flags: -C llvm-args=--disassemble-fn=subgroup_i_add_reduce::subgroup_i_add_reduce
 // normalize-stderr-test "OpLine .*\n" -> ""
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use glam::UVec3;
 use spirv_std::arch::{GroupOperation, SubgroupMask};

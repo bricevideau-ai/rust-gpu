@@ -423,6 +423,7 @@ where
                 size,
                 usage: BufferUsage::Storage,
                 initial_data: None,
+                element_size: 1,
             })
             .collect();
         Self::new(shader, dispatch, buffers)
@@ -796,6 +797,7 @@ impl WgpuComputeTestPushConstants<RustComputeShader> {
                 size,
                 usage: BufferUsage::Storage,
                 initial_data: None,
+                element_size: 1,
             })
             .collect();
         let push_constants_data = bytemuck::bytes_of(push_constant_data).to_vec();
@@ -824,6 +826,7 @@ impl WgpuComputeTestPushConstants<WgslComputeShader> {
                 size,
                 usage: BufferUsage::Storage,
                 initial_data: None,
+                element_size: 1,
             })
             .collect();
         let push_constants_data = bytemuck::bytes_of(push_constant_data).to_vec();

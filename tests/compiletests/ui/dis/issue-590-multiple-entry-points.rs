@@ -1,6 +1,9 @@
 // Tests that small entry-points aren't internalized by rustc and dropped
 // before reaching codegen. See https://github.com/Rust-GPU/rust-gpu/issues/590.
 
+// ignore-opencl1.2
+// ignore-opencl2.0
+
 // build-pass
 // compile-flags: -C debuginfo=0 -C llvm-args=--disassemble-globals
 // normalize-stderr-test "OpCapability VulkanMemoryModel\n" -> ""

@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that using push constants passes (Vulkan) validation.
 
 // build-pass

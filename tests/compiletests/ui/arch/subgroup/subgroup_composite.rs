@@ -8,6 +8,8 @@
 // ignore-spv1.2
 // ignore-spv1.3
 // ignore-spv1.4
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use glam::*;
 use spirv_std::ScalarComposite;

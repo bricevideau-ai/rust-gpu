@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "generic_fn_op_name"]
 //
 // Test that generic functions' `OpName` correctly include generic arguments.

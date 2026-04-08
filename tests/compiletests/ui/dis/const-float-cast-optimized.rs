@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that constant float widening casts are optimized to avoid creating
 // the smaller float type when not needed elsewhere.
 

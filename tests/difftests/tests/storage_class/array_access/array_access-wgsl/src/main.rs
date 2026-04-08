@@ -24,11 +24,13 @@ fn main() {
             size: 1024, // 256 u32 values
             usage: BufferUsage::StorageReadOnly,
             initial_data: Some(input_bytes),
+            element_size: 1,
         },
         BufferConfig {
             size: 1024, // 256 u32 values for output
             usage: BufferUsage::Storage,
             initial_data: None,
+            element_size: 1,
         },
     ];
 

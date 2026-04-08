@@ -103,7 +103,15 @@ impl SpirvType<'_> {
         let result = match self {
             Self::Void => cx.emit_global().type_void_id(id),
             Self::Bool => cx.emit_global().type_bool_id(id),
-            Self::Integer(width, signed) => cx.emit_global().type_int_id(id, width, signed as u32),
+            Self::Integer(width, signed) => {
+                // OpenCL Kernel capability requires signedness=0 for all OpTypeInt;
+                // sign is encoded in operations (e.g. OpSDiv vs OpUDiv), not types.
+                // We keep signedness in our internal SpirvType for correct codegen
+                // dispatch, but strip it in the emitted SPIR-V when targeting Kernel.
+                let emit_signed =
+                    signed && !cx.builder.has_capability(rspirv::spirv::Capability::Kernel);
+                cx.emit_global().type_int_id(id, width, emit_signed as u32)
+            }
             Self::Float(width) => cx.emit_global().type_float_id(id, width),
             Self::Adt {
                 def_id: _,

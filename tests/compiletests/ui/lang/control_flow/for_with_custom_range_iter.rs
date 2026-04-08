@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // NOTE(eddyb) this tests `for` loop desugaring (with its call to `Iterator::next`
 // and matching on the resulting `Option`), without relying on a `Range` iterator.
 // More precisely, `Range` used to not compile, due to it using `mem::replace`,

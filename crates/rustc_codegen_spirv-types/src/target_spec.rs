@@ -94,6 +94,13 @@ impl TargetSpecVersion {
         }
 
         let target_env = target.env();
+        // OpenCL targets use Physical64 addressing with 64-bit pointers.
+        let is_opencl = target_env.starts_with("opencl");
+        let (data_layout, pointer_width_raw) = if is_opencl {
+            ("e-m:e-p:64:64:64-i64:64-n8:16:32:64", 64_u32)
+        } else {
+            ("e-m:e-p:32:32:32-i64:64-n8:16:32:64", 32_u32)
+        };
         let allows_weak_linkage = if self >= Rustc_1_97_0 {
             ""
         } else {
@@ -104,14 +111,18 @@ impl TargetSpecVersion {
         } else {
             r#""os": "unknown","#
         };
-        let target_pointer_width = if self >= Rustc_1_93_0 { "32" } else { "\"32\"" };
+        let target_pointer_width = if self >= Rustc_1_93_0 {
+            format!("{pointer_width_raw}")
+        } else {
+            format!("\"{pointer_width_raw}\"")
+        };
         format!(
             r#"{{
   {allows_weak_linkage}
   "arch": "spirv",
   "crt-objects-fallback": "false",
   "crt-static-allows-dylibs": true,
-  "data-layout": "e-m:e-p:32:32:32-i64:64-n8:16:32:64",
+  "data-layout": "{data_layout}",
   "dll-prefix": "",
   "dll-suffix": ".spv.json",
   "dynamic-linking": true,

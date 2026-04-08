@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test `&'static T` constants where the `T` values don't themselves contain
 // references, and where the `T` values aren't immediately loaded from.
 

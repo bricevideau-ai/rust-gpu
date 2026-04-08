@@ -263,6 +263,29 @@ impl NumericType for f32 {
     }
 }
 
+impl NumericType for f64 {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        f64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ])
+    }
+    fn abs_diff(a: Self, b: Self) -> f64 {
+        (a - b).abs()
+    }
+    fn type_name() -> &'static str {
+        "F64"
+    }
+    fn format_value(value: Self) -> String {
+        format!("{value:.15}")
+    }
+    fn can_have_relative_diff() -> bool {
+        true
+    }
+    fn as_f64(value: Self) -> f64 {
+        value
+    }
+}
+
 impl NumericType for u32 {
     fn from_bytes(bytes: &[u8]) -> Self {
         u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
@@ -469,6 +492,7 @@ impl<T: NumericType> DifferenceDisplay for NumericDiffer<T> {
 
 /// Type aliases for specific numeric differs
 pub type F32Differ = NumericDiffer<f32>;
+pub type F64Differ = NumericDiffer<f64>;
 pub type U32Differ = NumericDiffer<u32>;
 
 impl From<OutputType> for Box<dyn OutputDiffer + Send + Sync> {
@@ -476,7 +500,7 @@ impl From<OutputType> for Box<dyn OutputDiffer + Send + Sync> {
         match output_type {
             OutputType::Raw => Box::new(RawDiffer),
             OutputType::F32 => Box::new(F32Differ::default()),
-            OutputType::F64 => unimplemented!("F64Differ not implemented yet"),
+            OutputType::F64 => Box::new(F64Differ::default()),
             OutputType::U32 => Box::new(U32Differ::default()),
             OutputType::I32 => unimplemented!("I32Differ not implemented yet"),
         }
@@ -488,7 +512,7 @@ impl From<OutputType> for Box<dyn DifferenceDisplay + Send + Sync> {
         match output_type {
             OutputType::Raw => Box::new(RawDiffer),
             OutputType::F32 => Box::new(F32Differ::default()),
-            OutputType::F64 => unimplemented!("F64Differ not implemented yet"),
+            OutputType::F64 => Box::new(F64Differ::default()),
             OutputType::U32 => Box::new(U32Differ::default()),
             OutputType::I32 => unimplemented!("I32Differ not implemented yet"),
         }

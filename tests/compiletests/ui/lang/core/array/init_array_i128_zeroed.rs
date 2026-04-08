@@ -1,3 +1,6 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
+
 // build-pass
 
 use spirv_std::spirv;

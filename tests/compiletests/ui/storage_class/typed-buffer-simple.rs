@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C target-feature=+RuntimeDescriptorArray,+ext:SPV_EXT_descriptor_indexing
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 // Tests the simplest `TypedBuffer` case: Multiple structs of of the same type and size.
 
