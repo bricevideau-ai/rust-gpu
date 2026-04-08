@@ -61,7 +61,7 @@ jobs:
       - name: cargo check examples
         run: cargo check -p example-runner-ash -p example-runner-wgpu -p example-runner-cpu -p compute-shader -p mouse-shader -p simplest-shader -p sky-shader --no-default-features --features "use-installed-tools"
       - name: cargo check opencl
-        run: cargo check -p example-runner-opencl-builder -p kernel-shader --no-default-features --features "use-installed-tools"
+        run: cargo check -p example-runner-opencl-builder -p example-runner-opencl -p kernel-shader --no-default-features --features "use-installed-tools"
 
       - name: build OpenCL kernel shader
         run: cargo run -p example-runner-opencl-builder --release --no-default-features --features "use-installed-tools"
