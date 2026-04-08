@@ -59,7 +59,7 @@ use smallvec::SmallVec;
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::{Range, RangeTo};
 use std::{fmt, io, iter, mem, slice};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 // FIXME(eddyb) move this elsewhere.
 struct FmtBy<F: Fn(&mut fmt::Formatter<'_>) -> fmt::Result>(F);
@@ -127,11 +127,18 @@ pub fn specialize(
             .collect();
     }
 
+    let has_kernel_capability = module.capabilities.iter().any(|inst| {
+        inst.operands
+            .first()
+            .is_some_and(|op| op.unwrap_capability() == rspirv::spirv::Capability::Kernel)
+    });
+
     let mut specializer = Specializer {
         specialization,
         debug_names,
         generics: IndexMap::new(),
         int_consts: FxHashMap::default(),
+        has_kernel_capability,
     };
 
     specializer.collect_generics(&module);
@@ -534,6 +541,10 @@ struct Specializer<S: Specialization> {
     /// Integer `OpConstant`s (i.e. containing a `LiteralBit32`), to be used
     /// for interpreting `TyPat::IndexComposite` (such as for `OpAccessChain`).
     int_consts: FxHashMap<Word, u32>,
+
+    /// Whether the module uses the `Kernel` capability (`OpenCL`). Used to
+    /// determine if inference conflicts are fatal or can be tolerated.
+    has_kernel_capability: bool,
 }
 
 impl<S: Specialization> Specializer<S> {
@@ -1494,31 +1505,49 @@ enum InferError {
     Conflict(InferOperand, InferOperand),
 }
 
+/// Log a message at `error!` or `warn!` level depending on `as_warning`.
+macro_rules! log_conflict {
+    ($as_warning:expr, $($args:tt)*) => {
+        if $as_warning {
+            warn!($($args)*);
+        } else {
+            error!($($args)*);
+        }
+    };
+}
+
 impl InferError {
-    fn report(self, inst: &Instruction) {
+    fn report(self, inst: &Instruction, has_kernel_capability: bool) {
+        // NOTE(Kerilk) For Kernel (OpenCL) targets, inference conflicts
+        // can be benign — the concrete_fallback mechanism handles unresolved
+        // variables. For Shader targets, conflicts indicate real bugs.
+        let as_warning = has_kernel_capability;
+
         // FIXME(eddyb) better error reporting than this.
         match self {
             Self::Conflict(a, b) => {
-                error!("inference conflict: {a:?} vs {b:?}");
+                log_conflict!(as_warning, "inference conflict: {a:?} vs {b:?}");
             }
         }
-        error!("    in ");
+        log_conflict!(as_warning, "    in ");
         // FIXME(eddyb) deduplicate this with other instruction printing logic.
         if let Some(result_id) = inst.result_id {
-            error!("%{result_id} = ");
+            log_conflict!(as_warning, "%{result_id} = ");
         }
-        error!("Op{:?}", inst.class.opcode);
+        log_conflict!(as_warning, "Op{:?}", inst.class.opcode);
         for operand in inst
             .result_type
             .map(Operand::IdRef)
             .iter()
             .chain(inst.operands.iter())
         {
-            error!(" {operand}");
+            log_conflict!(as_warning, " {operand}");
         }
-        error!("");
+        log_conflict!(as_warning, "");
 
-        std::process::exit(1);
+        if !has_kernel_capability {
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1989,7 +2018,7 @@ impl<'a, S: Specialization> InferCx<'a, S> {
             debug!("    found {:?}", m.debug_with_infer_cx(self));
 
             if let Err(e) = self.equate_match_findings(m) {
-                e.report(inst);
+                e.report(inst, self.specializer.has_kernel_capability);
             }
 
             debug_dump_if_enabled(self, " <- ");
@@ -2095,7 +2124,7 @@ impl<'a, S: Specialization> InferCx<'a, S> {
                             self.type_of_result.get(&ret_val_id).cloned(),
                         ) && let Err(e) = self.equate_infer_operands(expected, found)
                         {
-                            e.report(inst);
+                            e.report(inst, self.specializer.has_kernel_capability);
                         }
                     }
 
