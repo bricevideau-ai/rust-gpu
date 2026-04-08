@@ -6,6 +6,7 @@ use crate::abi::ConvSpirvType;
 use crate::attr::{AggregatedSpirvAttributes, Entry, Spanned, SpecConstant};
 use crate::builder::Builder;
 use crate::builder_spirv::{SpirvFunctionCursor, SpirvValue, SpirvValueExt};
+use crate::custom_decorations::{CustomDecoration, KernelParamPositionDecoration};
 use crate::spirv_type::SpirvType;
 use rspirv::dr::Operand;
 use rspirv::spirv::{
@@ -173,7 +174,9 @@ impl<'tcx> CodegenCx<'tcx> {
         let mut bx = Builder::build(self, Builder::append_block(self, stub_fn, ""));
         let mut call_args = vec![];
         let mut decoration_locations = FxHashMap::default();
-        for (entry_arg_abi, hir_param) in entry_fn_abi.args.iter().zip(hir_params) {
+        for (rust_param_idx, (entry_arg_abi, hir_param)) in
+            entry_fn_abi.args.iter().zip(hir_params).enumerate()
+        {
             bx.set_span(hir_param.span);
             self.declare_shader_interface_for_param(
                 execution_model,
@@ -183,6 +186,8 @@ impl<'tcx> CodegenCx<'tcx> {
                 &mut bx,
                 &mut call_args,
                 &mut decoration_locations,
+                stub_fn.id,
+                rust_param_idx,
             );
         }
         bx.set_span(span);
@@ -449,8 +454,46 @@ impl<'tcx> CodegenCx<'tcx> {
         bx: &mut Builder<'_, 'tcx>,
         call_args: &mut Vec<SpirvValue>,
         decoration_locations: &mut FxHashMap<StorageClass, u32>,
+        // For Kernel entry points: the entry function's `OpFunction` ID and
+        // the position of this parameter in the Rust source signature. Used
+        // to emit a `KernelParamPositionDecoration` on each global
+        // `OpVariable` so the linker's `kernel_arguments` pass can recover
+        // source order. (Codegen emits globals in an order influenced by
+        // dedup-by-type and multi-kernel interleaving, so positional
+        // recovery from `types_global_values` order is unreliable.)
+        kernel_entry_func: Word,
+        kernel_param_idx: usize,
     ) {
         let attrs = AggregatedSpirvAttributes::parse(self, self.tcx.hir_attrs(hir_param.hir_id));
+
+        // For Kernel only: tag a global `OpVariable` with its source-position
+        // sort key. `sub_pos` is `0` for the only/first global (or a slice's
+        // pointer) and `1` for a slice's length.
+        //
+        // BuiltIn-decorated variables are NOT tagged: they remain as global
+        // `Input` `OpVariable`s in the entry-point interface (the runtime
+        // populates them per work-item — they're not kernel arguments).
+        // Tagging them would also break the `remove_duplicate_types` linker
+        // pass, which uses annotations as part of its dedup key — multiple
+        // kernels' BuiltIn vars would no longer be merged into a single
+        // shared global, blowing up the SPIR-V's variable count.
+        let is_builtin = attrs.builtin.is_some();
+        let emit_kernel_param_pos = |var_id: Word, sub_pos: u32| {
+            if execution_model == ExecutionModel::Kernel && !is_builtin {
+                let position = ((kernel_param_idx as u32) << 1) | sub_pos;
+                let prefixed = format!(
+                    "{}{}:{}",
+                    KernelParamPositionDecoration::ENCODING_PREFIX,
+                    kernel_entry_func,
+                    position
+                );
+                self.emit_global().decorate_string(
+                    var_id,
+                    Decoration::UserTypeGOOGLE,
+                    std::iter::once(Operand::LiteralString(prefixed)),
+                );
+            }
+        };
 
         let EntryParamDeducedFromRustRefOrValue {
             value_layout,
@@ -601,6 +644,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 StorageClass::CrossWorkgroup,
                 None,
             );
+            emit_kernel_param_pos(data_var, 0);
             if let hir::PatKind::Binding(_, _, ident, _) = &hir_param.pat.kind {
                 self.emit_global().name(data_var, ident.to_string());
             }
@@ -616,6 +660,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 StorageClass::Input,
                 None,
             );
+            emit_kernel_param_pos(len_var, 1);
             if let hir::PatKind::Binding(_, _, ident, _) = &hir_param.pat.kind {
                 self.emit_global().name(len_var, format!("{}.len", ident));
             }
@@ -1078,6 +1123,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 // Emit the `OpVariable` with its *Result* ID set to `var_id`.
                 self.emit_global()
                     .variable(var_ptr_spirv_type, Some(var), storage_class, None);
+                emit_kernel_param_pos(var, 0);
 
                 // Record this `OpVariable` as needing to be added (if applicable),
                 // to the *Interface* operands of the `OpEntryPoint` instruction.
