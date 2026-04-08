@@ -348,13 +348,26 @@ impl<'tcx> CodegenCx<'tcx> {
     fn declare_global(&self, span: Span, ty: Word) -> SpirvValue {
         let ptr_ty = SpirvType::Pointer { pointee: ty }.def(span, self);
         // FIXME(eddyb) figure out what the correct storage class is.
+        // For Kernel (OpenCL) targets, use CrossWorkgroup storage class
+        // instead of Private (which requires the Shader capability).
+        // This creates a program-scope global variable in device memory.
+        let is_kernel = self
+            .builder
+            .has_capability(rspirv::spirv::Capability::Kernel);
+        let storage_class = if is_kernel {
+            StorageClass::CrossWorkgroup
+        } else {
+            StorageClass::Private
+        };
         let result = self
             .emit_global()
-            .variable(ptr_ty, None, StorageClass::Private, None)
+            .variable(ptr_ty, None, storage_class, None)
             .with_type(ptr_ty);
-        // TODO: These should be StorageClass::Private, so just zombie for now.
-        // FIXME(eddyb) why zombie? this looks like it should just work nowadays.
-        self.zombie_with_span(result.def_cx(self), span, "globals are not supported yet");
+        if !is_kernel {
+            // TODO: These should be StorageClass::Private, so just zombie for now.
+            // FIXME(eddyb) why zombie? this looks like it should just work nowadays.
+            self.zombie_with_span(result.def_cx(self), span, "globals are not supported yet");
+        }
         result
     }
 }
