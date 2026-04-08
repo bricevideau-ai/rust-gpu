@@ -110,7 +110,8 @@ impl SpirvType<'_> {
                 // dispatch, but strip it in the emitted SPIR-V when targeting Kernel.
                 let emit_signed =
                     signed && !cx.builder.has_capability(rspirv::spirv::Capability::Kernel);
-                cx.emit_global().type_int_id(id, width, emit_signed as u32)
+                cx.emit_global()
+                    .type_int_id(id, width, emit_signed as u32)
             }
             Self::Float(width) => cx.emit_global().type_float_id(id, width),
             Self::Adt {
