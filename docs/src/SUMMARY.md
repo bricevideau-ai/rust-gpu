@@ -11,6 +11,7 @@
   - [Publishing Rust-GPU on crates.io](./publishing-rust-gpu.md)
 - [Platform Support](./platform-support.md)
 - [Writing Shader Crates](./writing-shader-crates.md)
+- [Writing OpenCL Kernel Crates](./writing-kernel-crates.md)
 - [Features]()
   - [Attribute syntax](./attributes.md)
   - [Inline Assembly](./inline-asm.md)
