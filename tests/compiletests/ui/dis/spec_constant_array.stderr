@@ -25,12 +25,12 @@ OpDecorate %8 SpecId 45
 %8 = OpSpecConstant  %9  69
 %1 = OpFunction  %11  None %12
 %15 = OpLabel
-OpLine %3 25 4
+OpLine %3 27 4
 %16 = OpInBoundsAccessChain  %13  %2 %14
-OpLine %3 27 11
+OpLine %3 29 11
 %17 = OpIAdd  %9  %5 %6
 %18 = OpIAdd  %9  %17 %7
-OpLine %3 27 4
+OpLine %3 29 4
 %19 = OpIAdd  %9  %18 %8
 OpStore %16 %19
 OpNoLine

@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C target-feature=+ImageQuery
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 use spirv_std::{Image, Sampler, arch};

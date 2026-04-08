@@ -1,6 +1,8 @@
 // build-pass
 // compile-flags: -Ctarget-feature=+RayQueryKHR,+ext:SPV_KHR_ray_query
 // compile-flags: -Ctarget-feature=+RayQueryPositionFetchKHR,+ext:SPV_KHR_ray_tracing_position_fetch
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use glam::{Vec3, Vec4};
 use spirv_std::ray_tracing::{AccelerationStructure, RayFlags, RayQuery};

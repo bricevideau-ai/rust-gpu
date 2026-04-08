@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C llvm-args=--disassemble-fn=workgroup_memory_barrier::workgroup_memory_barrier
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 

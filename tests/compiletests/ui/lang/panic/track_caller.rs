@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that propagating `#[track_caller]` doesn't cause constant-related errors.
 
 // build-pass

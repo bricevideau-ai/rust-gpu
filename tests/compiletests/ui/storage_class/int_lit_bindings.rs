@@ -1,4 +1,6 @@
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 use spirv_std::spirv;
 
 #[spirv(compute(threads(1, 2u32, 3i128)))]

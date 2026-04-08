@@ -1,6 +1,8 @@
 // Test `OpImageWrite`
 // build-pass
 // compile-flags: -C target-feature=+StorageImageWriteWithoutFormat
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::glam::*;
 use spirv_std::spirv;
