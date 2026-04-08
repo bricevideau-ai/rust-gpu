@@ -1,0 +1,22 @@
+// build-pass
+// ignore-vulkan1.1
+// ignore-vulkan1.2
+// ignore-vulkan1.3
+// ignore-vulkan1.4
+// ignore-spv1.3
+// ignore-spv1.4
+
+use spirv_std::spirv;
+
+#[spirv(kernel)]
+pub fn main(
+    #[spirv(cross_workgroup)] src: &[u32],
+    #[spirv(cross_workgroup)] dst: &mut [u32],
+    index: u32,
+) {
+    unsafe {
+        let s = src.as_ptr().add(index as usize);
+        let d = dst.as_mut_ptr().add(index as usize);
+        *d = *s;
+    }
+}
