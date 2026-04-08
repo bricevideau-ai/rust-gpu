@@ -191,17 +191,21 @@ impl SpirvValue {
                 original_ptr_ty,
                 bitcast_result_id,
             } => {
-                cx.zombie_with_span(
-                    bitcast_result_id,
-                    span,
-                    &format!(
-                        "cannot cast between pointer types\
-                         \nfrom `{}`\
-                         \n  to `{}`",
-                        cx.debug_type(original_ptr_ty),
-                        cx.debug_type(self.ty)
-                    ),
-                );
+                // Pointer casts are invalid in Logical addressing (Shader)
+                // but valid in Physical addressing (Kernel/OpenCL) via OpBitcast.
+                if !cx.builder.is_physical_addressing() {
+                    cx.zombie_with_span(
+                        bitcast_result_id,
+                        span,
+                        &format!(
+                            "cannot cast between pointer types\
+                             \nfrom `{}`\
+                             \n  to `{}`",
+                            cx.debug_type(original_ptr_ty),
+                            cx.debug_type(self.ty)
+                        ),
+                    );
+                }
 
                 bitcast_result_id
             }
@@ -445,6 +449,9 @@ pub struct BuilderSpirv<'tcx> {
     /// Whether this module targets an `OpenCL` Kernel environment, derived from
     /// the target's memory model rather than the declared capability set.
     kernel_mode: bool,
+    /// Whether the module uses a Physical addressing model (raw pointer
+    /// arithmetic and pointer bitcasts are legal), as opposed to Logical.
+    physical_addressing: bool,
 }
 
 /// Validate that a capability is allowed by the `OpenCL` SPIR-V environment specification.
@@ -558,6 +565,7 @@ impl<'tcx> BuilderSpirv<'tcx> {
             id_to_const: Default::default(),
             debug_file_cache: Default::default(),
             kernel_mode: memory_model == MemoryModel::OpenCL,
+            physical_addressing: addressing_model == AddressingModel::Physical64,
         }
     }
 
@@ -583,6 +591,14 @@ impl<'tcx> BuilderSpirv<'tcx> {
     /// not depend on which capabilities have been declared.
     pub fn is_kernel_mode(&self) -> bool {
         self.kernel_mode
+    }
+
+    /// Whether the target's addressing model is Physical (`Physical64` on
+    /// `OpenCL` targets): raw pointer arithmetic like `OpPtrAccessChain` and
+    /// pointer `OpBitcast` are legal. Under `Logical` addressing they must be
+    /// zombied instead.
+    pub fn is_physical_addressing(&self) -> bool {
+        self.physical_addressing
     }
 
     /// See comment on `BuilderCursor`
