@@ -520,20 +520,32 @@ impl<'tcx> CodegenCx<'tcx> {
         // Certain storage classes require an `OpTypeStruct` decorated with `Block`,
         // which we represent with `SpirvType::InterfaceBlock` (see its doc comment).
         // This "interface block" construct is also required for "runtime arrays".
-        let is_unsized = self.lookup_type(value_spirv_type).sizeof(self).is_none();
+        let is_spirv_unsized = self.lookup_type(value_spirv_type).sizeof(self).is_none();
         let is_pair = matches!(entry_arg_abi.mode, PassMode::Pair(..));
-        let is_unsized_with_len = is_pair && is_unsized;
+        // For Kernel targets, [T] is lowered to the element type (sized in
+        // SPIR-V) instead of RuntimeArray, so the SPIR-V sizeof check gives
+        // the wrong answer for slice detection. Use the Rust layout instead.
+        let is_unsized_with_len = is_pair && value_layout.is_unsized();
         // HACK(eddyb) sanity check because we get the same information in two
         // very different ways, and going out of sync could cause subtle issues.
-        assert_eq!(
-            is_unsized_with_len,
-            value_layout.is_unsized(),
-            "`{}` param mismatch in call ABI (is_pair={is_pair}) + \
-             SPIR-V type (is_unsized={is_unsized}) \
-             vs layout:\n{value_layout:#?}",
-            entry_arg_abi.layout.ty
-        );
-        if is_pair && !is_unsized {
+        // NOTE(Kerilk) skipped for Kernel targets where [T] → element_type
+        // makes the SPIR-V type sized while the Rust layout is unsized, and
+        // for `#[spirv(runtime_array)]` intrinsics (sized in Rust, unsized
+        // in SPIR-V).
+        if !self
+            .builder
+            .has_capability(rspirv::spirv::Capability::Kernel)
+        {
+            assert_eq!(
+                is_pair && is_spirv_unsized,
+                is_unsized_with_len,
+                "`{}` param mismatch in call ABI (is_pair={is_pair}) + \
+                 SPIR-V type (is_unsized={is_spirv_unsized}) \
+                 vs layout:\n{value_layout:#?}",
+                entry_arg_abi.layout.ty
+            );
+        }
+        if is_pair && !value_layout.is_unsized() {
             // If PassMode is Pair, then we need to fill in the second part of the pair with a
             // value. We currently only do that with unsized types, so if a type is a pair for some
             // other reason (e.g. a tuple), we bail.
@@ -569,16 +581,13 @@ impl<'tcx> CodegenCx<'tcx> {
         // CrossWorkgroup (OpenCL) slices: decompose &[T] into two OpVariables
         // (a pointer to the element type + a length), avoiding the Shader-only
         // InterfaceBlock + OpArrayLength pattern used for StorageBuffer.
-        if storage_class == Ok(StorageClass::CrossWorkgroup)
-            && is_unsized_with_len
-            && matches!(
-                self.lookup_type(value_spirv_type),
-                SpirvType::RuntimeArray { .. }
-            )
-        {
+        if storage_class == Ok(StorageClass::CrossWorkgroup) && is_unsized_with_len {
+            // For Kernel targets, [T] is lowered to element_type directly
+            // (no RuntimeArray). For Shader targets this path isn't taken,
+            // but handle RuntimeArray for completeness.
             let element_type = match self.lookup_type(value_spirv_type) {
                 SpirvType::RuntimeArray { element } => element,
-                _ => unreachable!(),
+                _ => value_spirv_type,
             };
 
             // Data variable: *CrossWorkgroup element_type.
@@ -623,11 +632,9 @@ impl<'tcx> CodegenCx<'tcx> {
                     .unwrap(),
             );
 
-            // Pass (pointer, length) pair. The pointer type (*element_type)
-            // differs from what the inner function expects (*RuntimeArray<T>),
-            // but after inlining the pointer is only used for element access
-            // (via AccessChain with index 0 + element index), which works
-            // with both pointer types in Physical addressing.
+            // Pass (pointer, length) pair. For Kernel targets, [T] is
+            // represented as element_type, so the pointer types match
+            // directly between the entry stub and the inner function.
             call_args.extend([data_var.with_type(data_ptr_spirv_type), len_value]);
             return;
         }
@@ -673,7 +680,7 @@ impl<'tcx> CodegenCx<'tcx> {
 
                 Some(len.with_type(len_spirv_type))
             } else {
-                if is_unsized {
+                if is_spirv_unsized {
                     // It's OK to use a RuntimeArray<u32> and not have a length parameter, but
                     // it's just nicer ergonomics to use a slice.
                     self.tcx
@@ -703,7 +710,7 @@ impl<'tcx> CodegenCx<'tcx> {
                         }
                     }
                     _ => {
-                        if is_unsized {
+                        if is_spirv_unsized {
                             self.tcx.dcx().span_err(
                                 hir_param.ty_span,
                                 "only RuntimeArray is supported, not other unsized types",
@@ -715,7 +722,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 // FIXME(eddyb) determine, based on the type, what kind of type
                 // this is, to narrow it further to e.g. "buffer in a non-buffer
                 // storage class" or "storage class expects fixed data sizes".
-                if is_unsized {
+                if is_spirv_unsized {
                     self.tcx.dcx().span_fatal(
                         hir_param.ty_span,
                         format!(
