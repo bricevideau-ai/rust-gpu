@@ -566,6 +566,72 @@ impl<'tcx> CodegenCx<'tcx> {
                     SpirvType::InterfaceBlock { .. }
                 )
             };
+        // CrossWorkgroup (OpenCL) slices: decompose &[T] into two OpVariables
+        // (a pointer to the element type + a length), avoiding the Shader-only
+        // InterfaceBlock + OpArrayLength pattern used for StorageBuffer.
+        if storage_class == Ok(StorageClass::CrossWorkgroup)
+            && is_unsized_with_len
+            && matches!(
+                self.lookup_type(value_spirv_type),
+                SpirvType::RuntimeArray { .. }
+            )
+        {
+            let element_type = match self.lookup_type(value_spirv_type) {
+                SpirvType::RuntimeArray { element } => element,
+                _ => unreachable!(),
+            };
+
+            // Data variable: *CrossWorkgroup element_type.
+            // Use a pointer to the element type directly — OpenCL doesn't have
+            // RuntimeArray, buffers are just raw pointers to global memory.
+            let data_ptr_spirv_type = self.type_ptr_to(element_type);
+            let data_var = var_id.unwrap();
+            self.emit_global().variable(
+                data_ptr_spirv_type,
+                Some(data_var),
+                StorageClass::CrossWorkgroup,
+                None,
+            );
+            if let hir::PatKind::Binding(_, _, ident, _) = &hir_param.pat.kind {
+                self.emit_global().name(data_var, ident.to_string());
+            }
+
+            // Length variable: a second Input OpVariable for the slice length.
+            // The host sets this as a separate kernel argument.
+            let len_spirv_type = self.type_isize();
+            let len_ptr_spirv_type = self.type_ptr_to(len_spirv_type);
+            let len_var = self.emit_global().id();
+            self.emit_global().variable(
+                len_ptr_spirv_type,
+                Some(len_var),
+                StorageClass::Input,
+                None,
+            );
+            if let hir::PatKind::Binding(_, _, ident, _) = &hir_param.pat.kind {
+                self.emit_global().name(len_var, format!("{}.len", ident));
+            }
+
+            // Add both to entry point interface.
+            op_entry_point_interface_operands.push(data_var);
+            op_entry_point_interface_operands.push(len_var);
+
+            // Load length from Input variable.
+            let len_value = bx.load(
+                len_spirv_type,
+                len_var.with_type(len_ptr_spirv_type),
+                rustc_abi::Align::from_bytes((self.tcx.sess.target.pointer_width as u64) / 8)
+                    .unwrap(),
+            );
+
+            // Pass (pointer, length) pair. The pointer type (*element_type)
+            // differs from what the inner function expects (*RuntimeArray<T>),
+            // but after inlining the pointer is only used for element access
+            // (via AccessChain with index 0 + element index), which works
+            // with both pointer types in Physical addressing.
+            call_args.extend([data_var.with_type(data_ptr_spirv_type), len_value]);
+            return;
+        }
+
         let var_ptr_spirv_type;
         let (value_ptr, value_len) = if needs_interface_block && !has_explicit_interface_block {
             let var_spirv_type = SpirvType::InterfaceBlock {
