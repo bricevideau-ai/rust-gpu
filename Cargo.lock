@@ -1131,6 +1131,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-runner-opencl-builder"
+version = "0.0.0"
+dependencies = [
+ "spirv-builder",
+]
+
+[[package]]
 name = "example-runner-wgpu"
 version = "0.0.0"
 dependencies = [
@@ -1857,6 +1864,13 @@ checksum = "8c942ebf8e95485ca0d52d97da7c5a2c387d0e7f0ba4c35e93bfcaee045955b3"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kernel-shader"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
 ]
 
 [[package]]
