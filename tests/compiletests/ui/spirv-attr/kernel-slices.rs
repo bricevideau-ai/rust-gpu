@@ -40,18 +40,15 @@ pub fn test_copy_slice(
     dst[0] = src[0];
 }
 
-// Unsafe pointer-based indexing.
+// Dynamic indexing with builtin.
 
 #[spirv(kernel)]
-pub fn test_ptr_index(
+pub fn test_dynamic_index(
     #[spirv(global_invocation_id)] id: spirv_std::glam::UVec3,
     #[spirv(cross_workgroup)] data: &mut [u32],
 ) {
     let index = id.x as usize;
-    unsafe {
-        let ptr = data.as_mut_ptr().add(index);
-        *ptr = *ptr + 1;
-    }
+    data[index] = data[index] + 1;
 }
 
 // Slice with scalar parameter.
