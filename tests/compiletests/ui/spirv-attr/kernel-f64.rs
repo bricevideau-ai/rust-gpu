@@ -153,9 +153,5 @@ pub fn test_daxpy(
     alpha: f64,
 ) {
     let i = id.x as usize;
-    unsafe {
-        let xp = x.as_ptr().add(i);
-        let yp = y.as_mut_ptr().add(i);
-        *yp = alpha * *xp + *yp;
-    }
+    y[i] = alpha * x[i] + y[i];
 }
