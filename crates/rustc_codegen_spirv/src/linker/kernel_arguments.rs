@@ -68,11 +68,15 @@ pub fn convert_kernel_arguments(module: &mut Module) {
             let result_id = inst.result_id.unwrap();
             let ptr_type = inst.result_type.unwrap();
             let storage_class = inst.operands[0].unwrap_storage_class();
+            // Variables with initializers are program-scope globals (statics),
+            // not kernel arguments — don't convert them to function parameters.
+            let has_initializer = inst.operands.len() > 1;
             var_info.insert(
                 result_id,
                 VarInfo {
                     ptr_type,
                     storage_class,
+                    has_initializer,
                 },
             );
         }
@@ -128,6 +132,7 @@ pub fn convert_kernel_arguments(module: &mut Module) {
                 for op in inst.operands.iter().filter_map(|o| o.id_ref_any()) {
                     if let Some(vi) = var_info.get(&op)
                         && vi.storage_class == StorageClass::CrossWorkgroup
+                        && !vi.has_initializer
                         && !interface_param_ids.contains(&op)
                         && !body_var_ids.contains(&op)
                     {
@@ -284,6 +289,7 @@ pub fn convert_kernel_arguments(module: &mut Module) {
 struct VarInfo {
     ptr_type: u32,
     storage_class: StorageClass,
+    has_initializer: bool,
 }
 
 fn next_id(header: &mut Option<rspirv::dr::ModuleHeader>) -> u32 {
