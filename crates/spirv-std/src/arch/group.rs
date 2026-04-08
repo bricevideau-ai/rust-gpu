@@ -1,7 +1,7 @@
 //! Kernel-mode group operations using the `Groups` capability.
 //!
 //! These use `OpGroupAll`, `OpGroupAny`, `OpGroupBroadcast`, `OpGroupIAdd`,
-//! etc. which are valid for the Kernel execution model (OpenCL SPIR-V).
+//! etc. which are valid for the Kernel execution model (`OpenCL` SPIR-V).
 //!
 //! For Vulkan/Shader targets, use the `subgroup_*` functions instead,
 //! which use the `GroupNonUniform*` capabilities.
@@ -9,10 +9,8 @@
 #[cfg(target_arch = "spirv")]
 use core::arch::asm;
 
-use crate::memory::Scope;
-
 #[cfg(target_arch = "spirv")]
-const SUBGROUP: u32 = Scope::Subgroup as u32;
+const SUBGROUP: u32 = crate::memory::Scope::Subgroup as u32;
 
 /// Evaluates a predicate for all invocations in the group. Returns `true`
 /// if `predicate` is `true` for **all** invocations.

@@ -66,7 +66,7 @@ pub fn test_loop_break(#[spirv(cross_workgroup)] buf: &mut u32, limit: u32) {
 pub fn test_loop_continue(#[spirv(cross_workgroup)] buf: &mut u32, n: u32) {
     let mut sum = 0u32;
     for i in 0..n {
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             continue;
         }
         sum += i;

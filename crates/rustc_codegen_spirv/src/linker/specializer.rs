@@ -542,7 +542,7 @@ struct Specializer<S: Specialization> {
     /// for interpreting `TyPat::IndexComposite` (such as for `OpAccessChain`).
     int_consts: FxHashMap<Word, u32>,
 
-    /// Whether the module uses the Kernel capability (OpenCL). Used to
+    /// Whether the module uses the Kernel capability (`OpenCL`). Used to
     /// determine if inference conflicts are fatal or can be tolerated.
     has_kernel_capability: bool,
 }

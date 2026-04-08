@@ -1,28 +1,32 @@
-//! Convert Kernel entry stubs from void(void) + global OpVariable pattern
-//! to proper function parameters, as required by the OpenCL SPIR-V environment.
+//! Convert Kernel entry stubs from `void(void)` + global `OpVariable` pattern
+//! to proper function parameters, as required by the `OpenCL` SPIR-V environment.
 //!
 //! After inlining and specialization, Kernel entry points look like:
-//!   %entry = OpFunction %void None %fn_void_void
-//!   %label = OpLabel
-//!   %val   = OpLoad %T %global_var
-//!   ...
-//!   OpReturn
-//!   OpFunctionEnd
+//! ```text
+//! %entry = OpFunction %void None %fn_void_void
+//! %label = OpLabel
+//! %val   = OpLoad %T %global_var
+//! ...
+//! OpReturn
+//! OpFunctionEnd
+//! ```
 //!
-//! OpenCL consumers (e.g., pocl) expect:
-//!   %entry = OpFunction %void None %fn_type_with_params
-//!   %param = OpFunctionParameter %T
-//!   %label = OpLabel
-//!   ... (uses %param instead of OpLoad %global_var)
-//!   OpReturn
-//!   OpFunctionEnd
+//! `OpenCL` consumers (e.g., pocl) expect:
+//! ```text
+//! %entry = OpFunction %void None %fn_type_with_params
+//! %param = OpFunctionParameter %T
+//! %label = OpLabel
+//! ... (uses %param instead of OpLoad %global_var)
+//! OpReturn
+//! OpFunctionEnd
+//! ```
 
 use rspirv::dr::{Instruction, Module, Operand};
 use rspirv::spirv::{AddressingModel, BuiltIn, Decoration, ExecutionModel, Op, StorageClass};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 
-/// Convert Kernel entry points from global-OpVariable to OpFunctionParameter,
-/// and fix BuiltIn variable types for Physical64 addressing.
+/// Convert Kernel entry points from global-`OpVariable` to `OpFunctionParameter`,
+/// and fix `BuiltIn` variable types for Physical64 addressing.
 pub fn convert_kernel_arguments(module: &mut Module) {
     fix_builtin_types(module);
     // Find all Kernel entry points and their interface variables.
@@ -124,14 +128,13 @@ pub fn convert_kernel_arguments(module: &mut Module) {
         for block in &func.blocks {
             for inst in &block.instructions {
                 for op in inst.operands.iter().filter_map(|o| o.id_ref_any()) {
-                    if let Some(vi) = var_info.get(&op) {
-                        if vi.storage_class == StorageClass::CrossWorkgroup
-                            && !vi.has_initializer
-                            && !interface_param_ids.contains(&op)
-                            && !body_var_ids.contains(&op)
-                        {
-                            body_var_ids.push(op);
-                        }
+                    if let Some(vi) = var_info.get(&op)
+                        && vi.storage_class == StorageClass::CrossWorkgroup
+                        && !vi.has_initializer
+                        && !interface_param_ids.contains(&op)
+                        && !body_var_ids.contains(&op)
+                    {
+                        body_var_ids.push(op);
                     }
                 }
             }
@@ -239,10 +242,10 @@ pub fn convert_kernel_arguments(module: &mut Module) {
                 // Also replace any direct references to the variable (e.g., in
                 // OpInBoundsPtrAccessChain or OpStore).
                 for op in &mut inst.operands {
-                    if let Operand::IdRef(id) = op {
-                        if let Some(&param_id) = plan.param_id_map.get(id) {
-                            *op = Operand::IdRef(param_id);
-                        }
+                    if let Operand::IdRef(id) = op
+                        && let Some(&param_id) = plan.param_id_map.get(id)
+                    {
+                        *op = Operand::IdRef(param_id);
                     }
                 }
             }
@@ -294,9 +297,9 @@ fn next_id(header: &mut Option<rspirv::dr::ModuleHeader>) -> u32 {
     id
 }
 
-/// Fix BuiltIn variable types for Kernel entry points on Physical64 addressing.
+/// Fix `BuiltIn` variable types for Kernel entry points on Physical64 addressing.
 ///
-/// The OpenCL SPIR-V environment requires `GlobalInvocationId` and similar
+/// The `OpenCL` SPIR-V environment requires `GlobalInvocationId` and similar
 /// builtins to use `v3ulong` (vec3 of u64) on Physical64, not `v3uint`.
 /// Also adds the `Constant` decoration required by some implementations.
 fn fix_builtin_types(module: &mut Module) {
