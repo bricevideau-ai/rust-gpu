@@ -979,7 +979,35 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             let mut merged_indices = original_indices;
 
             let last_index_id = merged_indices.last_mut().unwrap();
-            *last_index_id = self.add(last_index_id.with_type(index.ty), index).def(self);
+            // The original AccessChain index may have a different integer
+            // width than the new offset (e.g., u32 vs u64 on Physical64).
+            // Look up the original index's type from the module and insert
+            // a widening conversion if needed.
+            let original_id = *last_index_id;
+            let original_ty = {
+                let builder = self.emit();
+                let module = builder.module_ref();
+                module
+                    .types_global_values
+                    .iter()
+                    .chain(
+                        builder
+                            .selected_function()
+                            .and_then(|idx| module.functions.get(idx))
+                            .into_iter()
+                            .flat_map(|f| f.all_inst_iter()),
+                    )
+                    .find(|inst| inst.result_id == Some(original_id))
+                    .and_then(|inst| inst.result_type)
+                    .unwrap_or(index.ty)
+            };
+            let original_val = original_id.with_type(original_ty);
+            let widened = if original_ty != index.ty {
+                self.intcast(original_val, index.ty, false)
+            } else {
+                original_val
+            };
+            *last_index_id = self.add(widened, index).def(self);
 
             return self.emit_access_chain(ptr.ty, original_ptr, None, merged_indices, is_inbounds);
         }
