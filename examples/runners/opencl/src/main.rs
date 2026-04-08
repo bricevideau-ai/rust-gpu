@@ -2,11 +2,13 @@ use opencl3::command_queue::{CL_QUEUE_PROFILING_ENABLE, CommandQueue};
 use opencl3::context::Context;
 use opencl3::device::{CL_DEVICE_TYPE_ALL, Device, get_all_devices};
 use opencl3::event::Event;
-use opencl3::kernel::{ExecuteKernel, Kernel};
+use opencl3::kernel::{
+    CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE, ExecuteKernel, Kernel, get_kernel_sub_group_info,
+};
 use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
 use opencl3::program::Program;
 use opencl3::types::{CL_BLOCKING, cl_device_id};
-use spirv_builder::{CompileResult, SpirvBuilder};
+use spirv_builder::{Capability, CompileResult, SpirvBuilder};
 use std::path::Path;
 use std::ptr;
 use std::time::{Duration, Instant};
@@ -209,6 +211,17 @@ fn compile_kernel_with_arg_info(
     Ok((spv_bytes, start.elapsed()))
 }
 
+/// Compile a kernel crate with `Groups` capability (`OpenCL` 2.0 for subgroup ops).
+fn compile_kernel_groups(path: &Path) -> Result<(Vec<u8>, Duration), Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    let result: CompileResult = SpirvBuilder::new(path, "spirv-unknown-opencl2.0")
+        .capability(Capability::Groups)
+        .build()?;
+    let spv_path = result.module.unwrap_single();
+    let spv_bytes = std::fs::read(spv_path)?;
+    Ok((spv_bytes, start.elapsed()))
+}
+
 /// Extract kernel execution time from profiling events.
 fn profiling_duration(event: &Event) -> Option<Duration> {
     let start = event.profiling_command_start().ok()?;
@@ -367,6 +380,446 @@ fn run_arg_info_test(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+/// Probe the actual sub-group execution width a built kernel will use
+/// for a given local work size, via `clGetKernelSubGroupInfo`
+/// (CL 2.1+) with `CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE`. Use this
+/// to predict whether sub-group reduction / scan / shuffle ops will do
+/// useful work or degenerate to per-lane no-ops on this device
+/// (the latter happens e.g. on rusticl over llvmpipe, which executes
+/// every work-item as its own SIMD lane regardless of what the
+/// device extension list advertises).
+fn subgroup_size_for_kernel(
+    ocl: &OclContext,
+    program: &Program,
+    kernel_name: &str,
+    local_size: &[usize],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let kernel = Kernel::create(program, kernel_name)?;
+    let info = get_kernel_sub_group_info(
+        kernel.get(),
+        ocl.device_id,
+        CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE,
+        std::mem::size_of_val(local_size),
+        local_size.as_ptr().cast(),
+    )
+    .map_err(|code| format!("clGetKernelSubGroupInfo: {code}"))?;
+    Ok(usize::from(info))
+}
+
+fn run_subgroup_tests(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>> {
+    let test_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-test-shader");
+    let (test_spv, test_time) = compile_kernel_groups(&test_crate)?;
+    println!(
+        "Compiled test kernel ({} bytes, {test_time:?})",
+        test_spv.len()
+    );
+    let test_program = ocl.build_program(&test_spv)?;
+
+    const WG: usize = 32;
+    const NUM_WG: usize = 4;
+    const N: usize = WG * NUM_WG;
+
+    // Probe the actual sub-group execution width for our N-D range
+    // via `clGetKernelSubGroupInfo` (CL 2.1+). Tests 3-7 are
+    // sub-group-scoped — their `group_i_add` / `group_exclusive_i_add`
+    // calls and `subgroup_id` accesses fold / partition across the
+    // executed sub-group size. Computing the expected values from
+    // the probed `sg_size` instead of assuming `sg_size == WG`
+    // means the tests pass on any device, whether it runs us as one
+    // big sub-group of 32 (pocl-cpu) or several smaller ones
+    // (rusticl-over-llvmpipe ships SG=4). Refuse to run when the
+    // result wouldn't be representative (sub-group size not a
+    // divisor of WG would yield a short trailing sub-group, which
+    // we don't bother modelling on the host side).
+    let sg_size =
+        subgroup_size_for_kernel(ocl, &test_program, "test_subgroup_builtins", &[WG, 1, 1])?;
+    assert!(
+        sg_size > 0 && WG.is_multiple_of(sg_size),
+        "test runner assumes sub-group size divides WG; got sg_size={sg_size}, WG={WG}",
+    );
+    let sgs_per_wg = WG / sg_size;
+    println!("Sub-group size for this device: {sg_size} ({sgs_per_wg} per work-group)");
+
+    let mut pass_count = 0u32;
+    let mut fail_count = 0u32;
+
+    fn check(name: &str, result: &[u32], expected: &[u32], pass: &mut u32, fail: &mut u32) {
+        let mut ok = true;
+        for (i, (&got, &exp)) in result.iter().zip(expected.iter()).enumerate() {
+            if got != exp {
+                if ok {
+                    println!("FAIL");
+                }
+                eprintln!("  [{i}]: got {got}, expected {exp}");
+                ok = false;
+            }
+        }
+        if ok {
+            println!("PASS");
+            *pass += 1;
+        } else {
+            *fail += 1;
+        }
+        let _ = name;
+    }
+
+    // Test 1: subgroup builtins (multi-workgroup)
+    {
+        let k = Kernel::create(&test_program, "test_subgroup_builtins")?;
+        let sg_id = ocl.upload(&vec![0u32; N])?;
+        let sg_lid = ocl.upload(&vec![0u32; N])?;
+        let num_sg = ocl.upload(&vec![0u32; N])?;
+        let sg_size_buf = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&sg_id, &sg_lid, &num_sg, &sg_size_buf])?;
+        let mut r_size = vec![0u32; N];
+        let mut r_num = vec![0u32; N];
+        let mut r_id = vec![0u32; N];
+        let mut r_lid = vec![0u32; N];
+        ocl.download(&sg_size_buf, &mut r_size)?;
+        ocl.download(&num_sg, &mut r_num)?;
+        ocl.download(&sg_id, &mut r_id)?;
+        ocl.download(&sg_lid, &mut r_lid)?;
+
+        let sg_sz = r_size[0];
+        let n_sg = r_num[0];
+        print!("Test 1 (subgroup builtins, {NUM_WG} WGs): sg_size={sg_sz}, num_sg={n_sg} ... ");
+
+        let mut expected_id = vec![0u32; N];
+        let mut expected_lid = vec![0u32; N];
+        for i in 0..N {
+            let lid = (i % WG) as u32;
+            expected_id[i] = lid / sg_sz;
+            expected_lid[i] = lid % sg_sz;
+        }
+        let mut ok = true;
+        for i in 0..N {
+            if r_id[i] != expected_id[i] || r_lid[i] != expected_lid[i] {
+                if ok {
+                    println!("FAIL");
+                }
+                eprintln!(
+                    "  [{i}]: sg_id={} (exp {}), sg_lid={} (exp {})",
+                    r_id[i], expected_id[i], r_lid[i], expected_lid[i]
+                );
+                ok = false;
+            }
+        }
+        if ok {
+            println!("PASS");
+            pass_count += 1;
+        } else {
+            fail_count += 1;
+        }
+    }
+
+    // Test 2: shared memory + barrier (multi-workgroup)
+    {
+        let k = Kernel::create(&test_program, "test_shared_barrier")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let mut expected = vec![0u32; N];
+        for (i, exp) in expected.iter_mut().enumerate() {
+            let lid = i % WG;
+            *exp = (31 - lid) as u32;
+        }
+        print!("Test 2 (shared + barrier, {NUM_WG} WGs): ");
+        check("test2", &r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Helpers parameterised on the probed sub-group size — the
+    // kernels fold / partition data along sub-group boundaries, so
+    // the expected output is a function of (sg_size, WG, NUM_WG)
+    // rather than a constant.
+    let sg = sg_size as u32;
+    // Sum of (j*sg+1)..=((j+1)*sg) — the value `group_i_add(lid+1)`
+    // produces in sub-group `j` of a work-group.
+    let sg_reduce_sum = |j_in_wg: u32| -> u32 { sg * sg * j_in_wg + sg * (sg + 1) / 2 };
+
+    // Test 3: group_i_add reduce (multi-workgroup)
+    {
+        let k = Kernel::create(&test_program, "test_group_reduce")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let mut expected = vec![0u32; N];
+        for (i, slot) in expected.iter_mut().enumerate() {
+            let lid = (i % WG) as u32;
+            *slot = sg_reduce_sum(lid / sg);
+        }
+        print!("Test 3 (group_i_add reduce, {NUM_WG} WGs): ");
+        for wg in 0..NUM_WG {
+            print!("wg{wg}={} ", r[wg * WG]);
+        }
+        check("test3", &r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Test 4: group_exclusive_i_add scan (multi-workgroup)
+    {
+        let k = Kernel::create(&test_program, "test_group_scan")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        // Exclusive prefix sum *within* each sub-group: the scan
+        // resets at every sub-group boundary.
+        let mut expected = vec![0u32; N];
+        for wg in 0..NUM_WG {
+            for sg_idx in 0..sgs_per_wg {
+                let mut acc = 0u32;
+                for offset in 0..sg_size {
+                    let lid = sg_idx * sg_size + offset;
+                    expected[wg * WG + lid] = acc;
+                    acc += lid as u32 + 1;
+                }
+            }
+        }
+        print!("Test 4 (group_exclusive_i_add scan, {NUM_WG} WGs): ");
+        for wg in 0..NUM_WG {
+            print!("wg{wg}=[{}..{}] ", r[wg * WG], r[wg * WG + WG - 1]);
+        }
+        check("test4", &r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Test 5: shared + subgroup builtins (multi-workgroup).
+    // Each sub-group leader writes `subgroup_id * 1000`; all lanes
+    // read back the value indexed by their own sub-group.
+    {
+        let k = Kernel::create(&test_program, "test_shared_with_subgroup_builtins")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let mut expected = vec![0u32; N];
+        for (i, slot) in expected.iter_mut().enumerate() {
+            let lid = (i % WG) as u32;
+            *slot = (lid / sg) * 1000;
+        }
+        print!("Test 5 (shared + subgroup builtins, {NUM_WG} WGs): ");
+        for wg in 0..NUM_WG {
+            print!("wg{wg}={} ", r[wg * WG]);
+        }
+        check("test5", &r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Test 6: subgroup reduce → lid==0 writes to shared[0] → all
+    // lanes read shared[0]. Only sub-group 0's lane 0 writes, so
+    // the value is sub-group 0's reduction sum (sg*(sg+1)/2), seen
+    // by every lane in the work-group.
+    {
+        let k = Kernel::create(&test_program, "test_subgroup_ops_with_shared")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let expected = vec![sg_reduce_sum(0); N];
+        print!("Test 6 (subgroup ops + shared, {NUM_WG} WGs): ");
+        for wg in 0..NUM_WG {
+            print!("wg{wg}={} ", r[wg * WG]);
+        }
+        check("test6", &r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Test 7: each sub-group leader writes its own sub-group's
+    // reduction sum to shared[subgroup_id]; every lane reads back
+    // the value for its own sub-group.
+    {
+        let k = Kernel::create(&test_program, "test_all_combined")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let mut expected = vec![0u32; N];
+        for (i, slot) in expected.iter_mut().enumerate() {
+            let lid = (i % WG) as u32;
+            *slot = sg_reduce_sum(lid / sg);
+        }
+        print!("Test 7 (all combined, {NUM_WG} WGs): ");
+        for wg in 0..NUM_WG {
+            print!("wg{wg}={} ", r[wg * WG]);
+        }
+        check("test7", &r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    println!("\nTotal: {pass_count} passed, {fail_count} failed");
+    if fail_count > 0 {
+        return Err(format!("{fail_count} subgroup test(s) failed").into());
+    }
+    Ok(())
+}
+
+fn run_workgroup_collective_tests(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>> {
+    // Reuse the kernel-test-shader crate (already compiled with Groups capability).
+    let test_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-test-shader");
+    let (test_spv, test_time) = compile_kernel_groups(&test_crate)?;
+    println!(
+        "Compiled test kernel ({} bytes, {test_time:?})",
+        test_spv.len()
+    );
+    let test_program = ocl.build_program(&test_spv)?;
+
+    // Work-group `reduce`/`scan`/`broadcast`/`any`/`all` need
+    // CL_DEVICE_WORK_GROUP_COLLECTIVE_FUNCTIONS_SUPPORT — the CL 3.0
+    // optional feature that rusticl currently reports as `false`.
+    // Skip cleanly on devices that don't support it.
+    if !Device::new(ocl.device_id)
+        .work_group_collective_functions_support()
+        .unwrap_or(false)
+    {
+        println!("SKIP: CL_DEVICE_WORK_GROUP_COLLECTIVE_FUNCTIONS_SUPPORT = false on this device");
+        return Ok(());
+    }
+
+    const WG: usize = 32;
+    const NUM_WG: usize = 4;
+    const N: usize = WG * NUM_WG;
+    // Sum of 1..=WG (constant-folded): 528 for WG=32. Each work-group
+    // computes the full sum independently, so every output slot equals it.
+    const WG_SUM: u32 = (WG as u32) * (WG as u32 + 1) / 2;
+
+    let mut pass_count = 0u32;
+    let mut fail_count = 0u32;
+
+    fn check(result: &[u32], expected: &[u32], pass: &mut u32, fail: &mut u32) {
+        let mut ok = true;
+        for (i, (&got, &exp)) in result.iter().zip(expected.iter()).enumerate() {
+            if got != exp {
+                if ok {
+                    println!("FAIL");
+                }
+                eprintln!("  [{i}]: got {got}, expected {exp}");
+                ok = false;
+            }
+        }
+        if ok {
+            println!("PASS");
+            *pass += 1;
+        } else {
+            *fail += 1;
+        }
+    }
+
+    // Test 1: work_group_i_add reduce — every lane in the WG gets the WG-wide sum.
+    {
+        let k = Kernel::create(&test_program, "test_work_group_reduce")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let expected = vec![WG_SUM; N];
+        print!("Test 1 (work_group_i_add reduce, {NUM_WG} WGs, expect {WG_SUM} per lane): ");
+        check(&r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Test 2: work_group_inclusive_i_add scan — out[lid] = sum(1..=lid+1).
+    {
+        let k = Kernel::create(&test_program, "test_work_group_inclusive_scan")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let mut expected = vec![0u32; N];
+        for wg in 0..NUM_WG {
+            let mut acc = 0u32;
+            for lid in 0..WG {
+                acc += lid as u32 + 1;
+                expected[wg * WG + lid] = acc;
+            }
+        }
+        print!("Test 2 (work_group_inclusive_i_add scan, {NUM_WG} WGs): ");
+        check(&r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Test 3: work_group_exclusive_i_add scan — out[lid] = sum(1..lid+1), out[0]=0.
+    {
+        let k = Kernel::create(&test_program, "test_work_group_exclusive_scan")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let mut expected = vec![0u32; N];
+        for wg in 0..NUM_WG {
+            let mut acc = 0u32;
+            for lid in 0..WG {
+                expected[wg * WG + lid] = acc;
+                acc += lid as u32 + 1;
+            }
+        }
+        print!("Test 3 (work_group_exclusive_i_add scan, {NUM_WG} WGs): ");
+        check(&r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Test 4: work_group_broadcast — every lane sees lid=7's contribution (700).
+    {
+        let k = Kernel::create(&test_program, "test_work_group_broadcast_kernel")?;
+        let out = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out])?;
+        let mut r = vec![0u32; N];
+        ocl.download(&out, &mut r)?;
+
+        let expected = vec![7u32 * 100; N];
+        print!("Test 4 (work_group_broadcast from lid=7, {NUM_WG} WGs, expect 700): ");
+        check(&r, &expected, &mut pass_count, &mut fail_count);
+    }
+
+    // Test 5: work_group_all / work_group_any — three predicates checked at once.
+    {
+        let k = Kernel::create(&test_program, "test_work_group_vote")?;
+        let out_all_true = ocl.upload(&vec![0u32; N])?;
+        let out_all_one = ocl.upload(&vec![0u32; N])?;
+        let out_any_one = ocl.upload(&vec![0u32; N])?;
+        ocl.run(&k, N, &[&out_all_true, &out_all_one, &out_any_one])?;
+        let mut r_all_true = vec![0u32; N];
+        let mut r_all_one = vec![0u32; N];
+        let mut r_any_one = vec![0u32; N];
+        ocl.download(&out_all_true, &mut r_all_true)?;
+        ocl.download(&out_all_one, &mut r_all_one)?;
+        ocl.download(&out_any_one, &mut r_any_one)?;
+
+        let expect_all_true = vec![1u32; N];
+        let expect_all_one = vec![0u32; N];
+        let expect_any_one = vec![1u32; N];
+        print!("Test 5a (work_group_all of `lid<32`, expect 1): ");
+        check(
+            &r_all_true,
+            &expect_all_true,
+            &mut pass_count,
+            &mut fail_count,
+        );
+        print!("Test 5b (work_group_all of `lid==5`, expect 0): ");
+        check(
+            &r_all_one,
+            &expect_all_one,
+            &mut pass_count,
+            &mut fail_count,
+        );
+        print!("Test 5c (work_group_any of `lid==5`, expect 1): ");
+        check(
+            &r_any_one,
+            &expect_any_one,
+            &mut pass_count,
+            &mut fail_count,
+        );
+    }
+
+    println!("\nTotal: {pass_count} passed, {fail_count} failed");
+    if fail_count > 0 {
+        return Err(format!("{fail_count} work-group collective test(s) failed").into());
+    }
+    Ok(())
+}
+
 // ── Main ───────────────────────────────────────────────────────────────
 
 /// Run a named test section, catching and reporting any errors.
@@ -411,6 +864,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         errors += 1;
     }
     if !section("Kernel arg info reflection", || run_arg_info_test(&ocl)) {
+        errors += 1;
+    }
+    if !section("Subgroup & shared memory tests", || {
+        run_subgroup_tests(&ocl)
+    }) {
+        errors += 1;
+    }
+    if !section("Work-group collective tests", || {
+        run_workgroup_collective_tests(&ocl)
+    }) {
         errors += 1;
     }
 
