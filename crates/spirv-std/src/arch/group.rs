@@ -246,3 +246,35 @@ group_op!(
     group_exclusive_f_max,
     "Float maximum group operation."
 );
+
+// Double-precision (f64) variants.
+
+group_op!(
+    f64,
+    "OpTypeFloat 64",
+    "OpGroupFAdd",
+    group_f64_add,
+    group_inclusive_f64_add,
+    group_exclusive_f64_add,
+    "Double-precision float add group operation."
+);
+
+group_op!(
+    f64,
+    "OpTypeFloat 64",
+    "OpGroupFMin",
+    group_f64_min,
+    group_inclusive_f64_min,
+    group_exclusive_f64_min,
+    "Double-precision float minimum group operation."
+);
+
+group_op!(
+    f64,
+    "OpTypeFloat 64",
+    "OpGroupFMax",
+    group_f64_max,
+    group_inclusive_f64_max,
+    group_exclusive_f64_max,
+    "Double-precision float maximum group operation."
+);
