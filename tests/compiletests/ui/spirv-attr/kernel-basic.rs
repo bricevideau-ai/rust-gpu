@@ -56,6 +56,26 @@ pub fn kernel_with_scalar(#[spirv(cross_workgroup)] buf: &mut u32, factor: u32) 
 #[spirv(kernel(threads(64)))]
 pub fn kernel_with_threads(#[spirv(global_invocation_id)] _id: USizeVec3) {}
 
+/// Kernel with a mutable slice parameter (CrossWorkgroup).
+/// Slices decompose into (data pointer, length) kernel arguments.
+#[spirv(kernel)]
+pub fn kernel_with_slice(#[spirv(cross_workgroup)] data: &mut [u32]) {
+    unsafe {
+        *data.as_mut_ptr() = 42;
+    }
+}
+
+/// Kernel with an immutable slice parameter.
+#[spirv(kernel)]
+pub fn kernel_with_readonly_slice(
+    #[spirv(cross_workgroup)] input: &[u32],
+    #[spirv(cross_workgroup)] output: &mut u32,
+) {
+    unsafe {
+        *output = *input.as_ptr();
+    }
+}
+
 /// Kernel with workgroup (shared/local) memory.
 #[spirv(kernel(threads(64)))]
 pub fn kernel_with_workgroup(
