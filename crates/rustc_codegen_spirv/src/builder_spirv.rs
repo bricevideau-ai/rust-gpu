@@ -192,17 +192,21 @@ impl SpirvValue {
                 original_ptr_ty,
                 bitcast_result_id,
             } => {
-                cx.zombie_with_span(
-                    bitcast_result_id,
-                    span,
-                    &format!(
-                        "cannot cast between pointer types\
-                         \nfrom `{}`\
-                         \n  to `{}`",
-                        cx.debug_type(original_ptr_ty),
-                        cx.debug_type(self.ty)
-                    ),
-                );
+                // Pointer casts are invalid in Logical addressing (Shader)
+                // but valid in Physical addressing (Kernel/OpenCL) via OpBitcast.
+                if !cx.builder.has_capability(Capability::Addresses) {
+                    cx.zombie_with_span(
+                        bitcast_result_id,
+                        span,
+                        &format!(
+                            "cannot cast between pointer types\
+                             \nfrom `{}`\
+                             \n  to `{}`",
+                            cx.debug_type(original_ptr_ty),
+                            cx.debug_type(self.ty)
+                        ),
+                    );
+                }
 
                 bitcast_result_id
             }
