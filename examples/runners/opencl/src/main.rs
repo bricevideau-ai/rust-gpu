@@ -31,15 +31,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device = Device::new(device_id);
     println!("Device:  {} ({})", device.name()?, device.vendor()?);
     println!("Version: {}", device.version()?);
+    println!(
+        "IL:      {}",
+        device
+            .il_version()
+            .unwrap_or_else(|_| "not supported".into())
+    );
+    println!(
+        "Extensions: {}",
+        device.extensions().unwrap_or_else(|_| "?".into())
+    );
+    println!(
+        "SPIR-V:  {} bytes, magic: 0x{:08x}",
+        spv_bytes.len(),
+        if spv_bytes.len() >= 4 {
+            u32::from_le_bytes([spv_bytes[0], spv_bytes[1], spv_bytes[2], spv_bytes[3]])
+        } else {
+            0
+        }
+    );
 
     let context = Context::from_device(&device)?;
     let queue =
         CommandQueue::create_default_with_properties(&context, CL_QUEUE_PROFILING_ENABLE, 0)?;
 
     // ── 3. Build program from SPIR-V IL ────────────────────────────────
-    let mut program = Program::create_from_il(&context, &spv_bytes)?;
-    program.build(context.devices(), "")?;
-    let kernel = Kernel::create(&program, "main_kernel")?;
+    let mut program = Program::create_from_il(&context, &spv_bytes)
+        .map_err(|e| format!("create_from_il: {e}"))?;
+    if let Err(e) = program.build(context.devices(), "") {
+        let log = program
+            .get_build_log(device_id)
+            .unwrap_or_else(|_| "no build log".into());
+        return Err(format!("program.build: {e}\nbuild log: {log}").into());
+    }
+    let kernel =
+        Kernel::create(&program, "main_kernel").map_err(|e| format!("create kernel: {e}"))?;
 
     // ── 4. Prepare input data ──────────────────────────────────────────
     let top = 2u32.pow(20);

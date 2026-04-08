@@ -24,7 +24,7 @@ pub fn collatz(mut n: u32) -> Option<u32> {
         return None;
     }
     while n != 1 {
-        n = if n % 2 == 0 {
+        n = if n.is_multiple_of(2) {
             n / 2
         } else {
             if n >= 0x5555_5555 {

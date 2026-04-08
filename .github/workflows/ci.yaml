@@ -57,9 +57,15 @@ jobs:
       - name: workspace test (excluding examples)
         run: cargo test --release --workspace --exclude "example-runner-*"  --exclude "cargo-gpu*" --no-default-features --features "use-installed-tools,clap"
 
+      # OpenCL — run early to iterate faster on failures
+      - name: build OpenCL kernel shader
+        run: cargo run -p example-runner-opencl-builder --release --no-default-features --features "use-installed-tools"
+
       # Examples
       - name: cargo check examples
         run: cargo check -p example-runner-ash -p example-runner-wgpu -p example-runner-cpu -p compute-shader -p mouse-shader -p simplest-shader -p sky-shader --no-default-features --features "use-installed-tools"
+      - name: cargo check opencl
+        run: cargo check -p example-runner-opencl-builder -p example-runner-opencl -p kernel-shader --no-default-features --features "use-installed-tools"
 
       - name: build example shaders
         env:
@@ -143,7 +149,7 @@ jobs:
       - name: compiletest
         run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env vulkan1.1,vulkan1.2,vulkan1.3,vulkan1.4,spv1.3,spv1.4
       - name: compiletest (opencl)
-        run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env opencl1.2 kernel
+        run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env opencl1.2,opencl2.0 kernel
 
   difftest:
     name: Difftest
