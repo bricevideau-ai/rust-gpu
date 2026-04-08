@@ -1021,11 +1021,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             return self.emit_access_chain(ptr.ty, original_ptr, None, merged_indices, is_inbounds);
         }
 
-        // None of the legalizing strategies above applied, so this operation
-        // isn't really supported (and will error if actually used from a shader).
+        // None of the legalizing strategies above applied, so emit
+        // `OpPtrAccessChain` / `OpInBoundsPtrAccessChain` directly.
+        // This is legal in Physical addressing (Kernel/OpenCL) but not in
+        // Logical addressing (Shader), where we zombie the result.
         //
         // FIXME(eddyb) supersede via SPIR-T pointer legalization (e.g. `qptr`).
-        trace!("ptr_offset_strided: falling back to (illegal) `OpPtrAccessChain`");
+        trace!("ptr_offset_strided: falling back to `OpPtrAccessChain`");
 
         let result_ptr = if is_inbounds {
             self.emit()
@@ -1035,10 +1037,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 .ptr_access_chain(ptr.ty, None, ptr_id, index.def(self), vec![])
         }
         .unwrap();
-        self.zombie(
-            result_ptr,
-            "cannot offset a pointer to an arbitrary element",
-        );
+        if !self.builder.is_physical_addressing() {
+            self.zombie(
+                result_ptr,
+                "cannot offset a pointer to an arbitrary element",
+            );
+        }
         result_ptr.with_type(ptr.ty)
     }
 
@@ -1084,7 +1088,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 )
             }
             .unwrap();
-            self.zombie(result, "cannot offset a pointer to an arbitrary element");
+            // OpPtrAccessChain is valid in Physical addressing (Kernel/OpenCL)
+            // but not in Logical addressing (Shader).
+            if !self.builder.is_physical_addressing() {
+                self.zombie(result, "cannot offset a pointer to an arbitrary element");
+            }
             result
         } else {
             if is_inbounds {
@@ -2059,9 +2067,16 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         // "first index" (which acts as `<*T>::offset` aka "pointer arithmetic").
         if let &[ptr_base_index, structured_index] = indices
             && self.builder.lookup_const_scalar(ptr_base_index) == Some(0)
-            && let SpirvType::Array { element, .. } | SpirvType::RuntimeArray { element, .. } =
-                self.lookup_type(ty)
         {
+            let element = match self.lookup_type(ty) {
+                SpirvType::Array { element, .. } | SpirvType::RuntimeArray { element, .. } => {
+                    element
+                }
+                // For Kernel targets, [T] is the element type directly (no
+                // RuntimeArray), so ty is already the element type.
+                _ if self.builder.is_kernel_mode() => ty,
+                _ => return self.maybe_inbounds_gep(ty, ptr, indices, true),
+            };
             return self.maybe_inbounds_gep(element, ptr, &[structured_index], true);
         }
 
