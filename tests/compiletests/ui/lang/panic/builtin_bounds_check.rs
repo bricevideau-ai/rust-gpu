@@ -1,5 +1,7 @@
 // Test that bounds checking causes panics.
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 

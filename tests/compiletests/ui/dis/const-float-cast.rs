@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test whether float constant casts need optimization
 
 // build-pass

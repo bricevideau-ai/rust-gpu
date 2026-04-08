@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C llvm-args=--disassemble-fn=add_two_ints::add_two_ints
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 

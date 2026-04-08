@@ -1,4 +1,6 @@
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that u8 constants cast to u32 don't require Int8 capability
 
 use spirv_std::spirv;

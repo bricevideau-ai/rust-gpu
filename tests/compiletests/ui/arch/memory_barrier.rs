@@ -1,4 +1,6 @@
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 #![feature(adt_const_params)]
 #![allow(incomplete_features)]

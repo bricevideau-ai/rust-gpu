@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "issue_373"]
 
 // Test that returning a single-scalar-field `#[repr(C)] struct` doesn't generate

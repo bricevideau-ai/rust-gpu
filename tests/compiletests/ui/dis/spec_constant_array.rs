@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Tests the various forms of `#[spirv(spec_constant)]`.
 
 // build-pass

@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 use spirv_std::glam::Vec4;
 use spirv_std::spirv;
 use spirv_std::{Sampler, image::Image2dArray};

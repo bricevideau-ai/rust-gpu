@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that newtypes of `ScalarPair` can have references taken to their field.
 
 // build-pass

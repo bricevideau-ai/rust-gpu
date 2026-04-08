@@ -13,7 +13,7 @@ OpBranch %12
 OpBranch %12
 %12 = OpLabel
 %15 = OpPhi  %16  %17 %13 %18 %14
-OpLine %19 13 4
+OpLine %19 15 4
 OpStore %20 %15
 OpNoLine
 OpReturn

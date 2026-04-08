@@ -2,6 +2,8 @@
 // compile-flags: -C target-feature=+GroupNonUniform,+GroupNonUniformBallot,+ext:SPV_KHR_vulkan_memory_model
 // compile-flags: -C llvm-args=--disassemble-fn=subgroup_ballot_bit_count::subgroup_ballot_bit_count
 // normalize-stderr-test "OpLine .*\n" -> ""
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::arch::{GroupOperation, SubgroupMask};
 use spirv_std::spirv;

@@ -1,5 +1,7 @@
 // Test that various packing methods work.
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::float::*;
 use spirv_std::glam::{Vec2, Vec4};

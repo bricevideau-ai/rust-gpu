@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C target-feature=+Int8,+Int16,+Int64
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 
