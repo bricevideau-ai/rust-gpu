@@ -18,10 +18,8 @@ pub fn test_shared_write_read(
 ) {
     let id = local_id.x as usize;
     shared[id] = id as u32 * 10;
-    unsafe { workgroup_memory_barrier_with_group_sync() };
-    unsafe {
-        *out.as_mut_ptr().add(id) = shared[id];
-    }
+    workgroup_memory_barrier_with_group_sync();
+    out[id] = shared[id];
 }
 
 // Shared memory: neighbor exchange.
@@ -33,12 +31,9 @@ pub fn test_shared_neighbor(
 ) {
     let id = local_id.x as usize;
     shared[id] = id as u32;
-    unsafe { workgroup_memory_barrier_with_group_sync() };
-    // Read from neighbor (with wrap-around).
+    workgroup_memory_barrier_with_group_sync();
     let neighbor = (id + 1) % 32;
-    unsafe {
-        *out.as_mut_ptr().add(id) = shared[neighbor];
-    }
+    out[id] = shared[neighbor];
 }
 
 // Parallel reduction in shared memory.
@@ -53,11 +48,8 @@ pub fn test_reduction(
 ) {
     let id = local_id.x as usize;
 
-    // Load from global to shared.
-    unsafe {
-        shared[id] = *input.as_ptr().add(id);
-        workgroup_memory_barrier_with_group_sync();
-    }
+    shared[id] = input[id];
+    workgroup_memory_barrier_with_group_sync();
 
     // Tree reduction.
     let mut stride = WG_SIZE / 2;
@@ -65,11 +57,10 @@ pub fn test_reduction(
         if id < stride {
             shared[id] += shared[id + stride];
         }
-        unsafe { workgroup_memory_barrier_with_group_sync() };
+        workgroup_memory_barrier_with_group_sync();
         stride /= 2;
     }
 
-    // First thread writes the result.
     if id == 0 {
         *output = shared[0];
     }
@@ -85,17 +76,15 @@ pub fn test_reduction_f64(
 ) {
     let id = local_id.x as usize;
 
-    unsafe {
-        shared[id] = *input.as_ptr().add(id);
-        workgroup_memory_barrier_with_group_sync();
-    }
+    shared[id] = input[id];
+    workgroup_memory_barrier_with_group_sync();
 
     let mut stride = WG_SIZE / 2;
     while stride > 0 {
         if id < stride {
             shared[id] += shared[id + stride];
         }
-        unsafe { workgroup_memory_barrier_with_group_sync() };
+        workgroup_memory_barrier_with_group_sync();
         stride /= 2;
     }
 
@@ -114,8 +103,6 @@ pub fn test_shared_fill(
 ) {
     let id = local_id.x as usize;
     shared[id] = value;
-    unsafe { workgroup_memory_barrier_with_group_sync() };
-    unsafe {
-        *out.as_mut_ptr().add(id) = shared[id];
-    }
+    workgroup_memory_barrier_with_group_sync();
+    out[id] = shared[id];
 }

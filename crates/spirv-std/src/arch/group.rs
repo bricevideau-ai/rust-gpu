@@ -207,9 +207,11 @@ group_op!(
     "Unsigned integer maximum group operation."
 );
 
+// NOTE: Kernel capability requires signedness=0 for all OpTypeInt.
+// Sign is encoded in the operation (OpGroupSMin vs OpGroupUMin), not the type.
 group_op!(
     i32,
-    "OpTypeInt 32 1",
+    "OpTypeInt 32 0",
     "OpGroupSMin",
     group_s_min,
     group_inclusive_s_min,
@@ -219,7 +221,7 @@ group_op!(
 
 group_op!(
     i32,
-    "OpTypeInt 32 1",
+    "OpTypeInt 32 0",
     "OpGroupSMax",
     group_s_max,
     group_inclusive_s_max,
