@@ -64,10 +64,7 @@ pub fn kernel_with_slice(
     #[spirv(cross_workgroup)] data: &mut [u32],
 ) {
     let index = id.x as usize;
-    unsafe {
-        let ptr = data.as_mut_ptr().add(index);
-        *ptr = *ptr * 2;
-    }
+    data[index] = data[index] * 2;
 }
 
 /// Kernel with an immutable slice parameter.
@@ -76,9 +73,7 @@ pub fn kernel_with_readonly_slice(
     #[spirv(cross_workgroup)] input: &[u32],
     #[spirv(cross_workgroup)] output: &mut u32,
 ) {
-    unsafe {
-        *output = *input.as_ptr();
-    }
+    *output = input[0];
 }
 
 /// Kernel with workgroup (shared/local) memory.
