@@ -102,6 +102,9 @@ struct ModuleIndex {
 struct VarInfo {
     ptr_type: u32,
     storage_class: StorageClass,
+    /// Variables with an initializer are program-scope statics, not kernel
+    /// arguments — leave them alone.
+    has_initializer: bool,
 }
 
 impl ModuleIndex {
@@ -125,6 +128,7 @@ impl ModuleIndex {
                         VarInfo {
                             ptr_type: inst.result_type.unwrap(),
                             storage_class: inst.operands[0].unwrap_storage_class(),
+                            has_initializer: inst.operands.len() > 1,
                         },
                     );
                 }
@@ -223,6 +227,7 @@ impl Plan {
                         continue;
                     };
                     if vi.storage_class == StorageClass::CrossWorkgroup
+                        && !vi.has_initializer
                         && !interface_param_ids.contains(&op)
                         && !body_var_ids.contains(&op)
                     {
