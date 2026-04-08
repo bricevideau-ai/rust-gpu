@@ -124,15 +124,20 @@ impl SpirvType<'_> {
                 let mut emit = cx.emit_global();
                 let result = emit.type_struct_id(id, field_types.iter().cloned());
                 // The struct size is only used in our own sizeof_in_bits() (used in e.g. ArrayStride decoration)
-                for (index, offset) in field_offsets.iter().copied().enumerate() {
-                    emit.member_decorate(
-                        result,
-                        index as u32,
-                        Decoration::Offset,
-                        [Operand::LiteralBit32(offset.bytes() as u32)]
-                            .iter()
-                            .cloned(),
-                    );
+                // MemberDecorate Offset requires the Shader capability. For Kernel
+                // targets (OpenCL), struct layout follows the platform's default
+                // rules (C-style), so explicit offset decorations are not needed.
+                if !cx.builder.has_capability(rspirv::spirv::Capability::Kernel) {
+                    for (index, offset) in field_offsets.iter().copied().enumerate() {
+                        emit.member_decorate(
+                            result,
+                            index as u32,
+                            Decoration::Offset,
+                            [Operand::LiteralBit32(offset.bytes() as u32)]
+                                .iter()
+                                .cloned(),
+                        );
+                    }
                 }
                 if let Some(field_names) = field_names {
                     for (index, field_name) in field_names.iter().enumerate() {
@@ -223,6 +228,11 @@ impl SpirvType<'_> {
     }
 
     fn decorate_array_stride(result: u32, element: u32, cx: &CodegenCx<'_>) {
+        // ArrayStride decoration requires the Shader capability. For Kernel
+        // targets (OpenCL), array layout follows the platform's default rules.
+        if cx.builder.has_capability(rspirv::spirv::Capability::Kernel) {
+            return;
+        }
         let mut emit = cx.emit_global();
         let ty = cx.lookup_type(element);
         if let Some(element_size) = ty.physical_size(cx) {
