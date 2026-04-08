@@ -984,15 +984,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             return self.emit_access_chain(ptr.ty, original_ptr, None, merged_indices, is_inbounds);
         }
 
-        // None of the legalizing strategies above applied, so this operation
-        // isn't really supported (and will error if actually used from a shader).
+        // None of the legalizing strategies above applied, so emit
+        // `OpPtrAccessChain` / `OpInBoundsPtrAccessChain` directly.
+        // This is legal in Physical addressing (Kernel/OpenCL) but not in
+        // Logical addressing (Shader), where we zombie the result.
         //
         // FIXME(eddyb) supersede via SPIR-T pointer legalization (e.g. `qptr`).
-        // FIXME(Kerilk) for Physical addressing (Kernel/OpenCL), this should
-        // be legal — but the linker specializer currently can't handle
-        // OpPtrAccessChain or OpConvertPtrToU/OpConvertUToPtr without
-        // inference conflicts on composite types containing Generic pointers.
-        trace!("ptr_offset_strided: falling back to (illegal) `OpPtrAccessChain`");
+        trace!("ptr_offset_strided: falling back to `OpPtrAccessChain`");
 
         let result_ptr = if is_inbounds {
             self.emit()
@@ -1002,10 +1000,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 .ptr_access_chain(ptr.ty, None, ptr_id, index.def(self), vec![])
         }
         .unwrap();
-        self.zombie(
-            result_ptr,
-            "cannot offset a pointer to an arbitrary element",
-        );
+        if !self
+            .builder
+            .has_capability(rspirv::spirv::Capability::Addresses)
+        {
+            self.zombie(
+                result_ptr,
+                "cannot offset a pointer to an arbitrary element",
+            );
+        }
         result_ptr.with_type(ptr.ty)
     }
 
@@ -1051,7 +1054,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 )
             }
             .unwrap();
-            self.zombie(result, "cannot offset a pointer to an arbitrary element");
+            // OpPtrAccessChain is valid in Physical addressing (Kernel/OpenCL)
+            // but not in Logical addressing (Shader).
+            if !self
+                .builder
+                .has_capability(rspirv::spirv::Capability::Addresses)
+            {
+                self.zombie(result, "cannot offset a pointer to an arbitrary element");
+            }
             result
         } else {
             if is_inbounds {
