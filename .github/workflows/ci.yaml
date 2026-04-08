@@ -148,7 +148,7 @@ jobs:
       - name: compiletest
         run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env vulkan1.1,vulkan1.2,vulkan1.3,vulkan1.4,spv1.3,spv1.4
       - name: compiletest (opencl)
-        run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env opencl1.2 kernel
+        run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env opencl1.2,opencl2.0 kernel
 
   difftest:
     name: Difftest
