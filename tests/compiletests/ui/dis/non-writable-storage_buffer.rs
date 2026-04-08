@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "non_writable_storage_buffer"]
 
 // Tests that only `&T` (where `T: Freeze`) storage buffers get `NonWritable`.

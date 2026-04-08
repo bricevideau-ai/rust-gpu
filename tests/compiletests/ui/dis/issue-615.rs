@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "issue_615"]
 
 // Tests the generated SPIR-V type shapes for multi-variant `enum`s whose layout

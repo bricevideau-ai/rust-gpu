@@ -1,6 +1,8 @@
 // build-pass
 // compile-flags: -C target-feature=+DerivativeControl
 // compile-flags: -C llvm-args=--disassemble-fn=derivative_control::derivative
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::arch::Derivative;
 use spirv_std::spirv;

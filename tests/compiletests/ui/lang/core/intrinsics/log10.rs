@@ -1,5 +1,7 @@
 // Test log10 intrinsic
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 #![allow(internal_features)]
 #![feature(core_intrinsics)]

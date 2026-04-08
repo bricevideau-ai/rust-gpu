@@ -1,5 +1,7 @@
 // Test that `signum` works.
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::num_traits::Float;
 use spirv_std::spirv;

@@ -8,6 +8,8 @@
 // normalize-stderr-test "OpMemoryModel Logical Vulkan" -> "OpMemoryModel Logical Simple"
 // ignore-vulkan1.0
 // ignore-vulkan1.1
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::arch::subgroup_shuffle_up;
 use spirv_std::spirv;

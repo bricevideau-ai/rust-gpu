@@ -1,5 +1,5 @@
 warning: `#[inline(never)]` function `member_ref_arg_tuples::f` has been inlined
-  --> <$DIR/member_ref_arg_tuples.rs>:16:4
+  --> <$DIR/member_ref_arg_tuples.rs>:18:4
    |
 LL | fn f(x: &u32) -> u32 {
    |    ^
@@ -8,7 +8,7 @@ LL | fn f(x: &u32) -> u32 {
    = note: called from `member_ref_arg_tuples::main`
 
 warning: `#[inline(never)]` function `member_ref_arg_tuples::g` has been inlined
-  --> <$DIR/member_ref_arg_tuples.rs>:21:4
+  --> <$DIR/member_ref_arg_tuples.rs>:23:4
    |
 LL | fn g(xy: (&u32, &u32)) -> (u32, u32) {
    |    ^
@@ -17,7 +17,7 @@ LL | fn g(xy: (&u32, &u32)) -> (u32, u32) {
    = note: called from `member_ref_arg_tuples::main`
 
 warning: `#[inline(never)]` function `member_ref_arg_tuples::h` has been inlined
-  --> <$DIR/member_ref_arg_tuples.rs>:26:4
+  --> <$DIR/member_ref_arg_tuples.rs>:28:4
    |
 LL | fn h(xyz: (&u32, &u32, &u32)) -> (u32, u32, u32) {
    |    ^
@@ -26,7 +26,7 @@ LL | fn h(xyz: (&u32, &u32, &u32)) -> (u32, u32, u32) {
    = note: called from `member_ref_arg_tuples::main`
 
 warning: `#[inline(never)]` function `member_ref_arg_tuples::h_newtyped` has been inlined
-  --> <$DIR/member_ref_arg_tuples.rs>:38:4
+  --> <$DIR/member_ref_arg_tuples.rs>:40:4
    |
 LL | fn h_newtyped(xyz: ((&u32, &u32, &u32),)) -> (u32, u32, u32) {
    |    ^^^^^^^^^^

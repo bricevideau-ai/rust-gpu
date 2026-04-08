@@ -1,6 +1,8 @@
 // build-pass
 //
 // compile-flags: -C target-feature=+DemoteToHelperInvocationEXT,+ext:SPV_EXT_demote_to_helper_invocation
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 

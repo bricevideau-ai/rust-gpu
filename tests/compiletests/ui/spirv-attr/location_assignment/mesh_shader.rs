@@ -13,6 +13,8 @@
 // ignore-spv1.3
 // ignore-vulkan1.0
 // ignore-vulkan1.1
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::arch::set_mesh_outputs_ext;
 use spirv_std::glam::{UVec3, Vec4};

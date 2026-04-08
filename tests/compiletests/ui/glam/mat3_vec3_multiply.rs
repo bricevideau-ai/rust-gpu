@@ -1,5 +1,7 @@
 // Tests multiplying a `Mat3` by a `Vec3`.
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 
