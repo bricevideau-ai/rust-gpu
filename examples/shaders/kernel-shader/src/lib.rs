@@ -53,3 +53,21 @@ pub fn main_kernel(
     let index = id.x;
     prime_indices[index] = collatz(prime_indices[index]).unwrap_or(u32::MAX);
 }
+
+/// Regression test for kernel argument ordering. The runner sets args in
+/// Rust source order and verifies the slice received `(scalar_a, scalar_b)`
+/// at indices `[0, 1]`. If the linker mis-orders the `(slice_ptr, slice_len,
+/// scalar_a, scalar_b)` parameters, the kernel reads `scalar_b` into the
+/// `scalar_a` slot or vice versa, and the runtime check fails.
+#[spirv(kernel)]
+pub fn arg_ordering_test(
+    #[spirv(global_invocation_id)] id: USizeVec3,
+    #[spirv(cross_workgroup)] data: &mut [u32],
+    scalar_a: u32,
+    scalar_b: u32,
+) {
+    if id.x == 0 {
+        data[0] = scalar_a;
+        data[1] = scalar_b;
+    }
+}
