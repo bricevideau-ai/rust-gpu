@@ -70,11 +70,17 @@ impl SpirvTarget {
     }
 
     pub fn rustc_target(&self) -> Target {
+        // OpenCL targets use Physical64 addressing with 64-bit pointers.
+        let (pointer_width, data_layout) = if self.memory_model() == MemoryModel::OpenCL {
+            (64, "e-m:e-p:64:64:64-i64:64-n8:16:32:64")
+        } else {
+            (32, "e-m:e-p:32:32:32-i64:64-n8:16:32:64")
+        };
         Target {
             llvm_target: self.to_string().into(),
             metadata: Default::default(),
-            pointer_width: 32,
-            data_layout: "e-m:e-p:32:32:32-i64:64-n8:16:32:64".into(),
+            pointer_width: pointer_width,
+            data_layout: data_layout.into(),
             arch: Arch::Other(ARCH.into()),
             options: self.init_target_opts(),
         }
@@ -104,10 +110,6 @@ impl std::str::FromStr for SpirvTarget {
         }
 
         let result = Self { env, vendor };
-
-        if result.memory_model() == MemoryModel::OpenCL {
-            return Err(error());
-        }
 
         Ok(result)
     }

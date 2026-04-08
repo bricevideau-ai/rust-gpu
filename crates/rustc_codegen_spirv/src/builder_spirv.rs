@@ -489,22 +489,38 @@ impl<'tcx> BuilderSpirv<'tcx> {
             }
         }
 
-        add_cap(&mut builder, &mut enabled_capabilities, Capability::Shader);
-        if memory_model == MemoryModel::Vulkan {
-            if version < (1, 5) {
-                add_ext(&mut builder, sym.spv_khr_vulkan_memory_model);
-            }
+        if memory_model == MemoryModel::OpenCL {
+            add_cap(&mut builder, &mut enabled_capabilities, Capability::Kernel);
             add_cap(
                 &mut builder,
                 &mut enabled_capabilities,
-                Capability::VulkanMemoryModel,
+                Capability::Addresses,
             );
+            // Physical64 addressing requires 64-bit integers for pointer-sized values.
+            add_cap(&mut builder, &mut enabled_capabilities, Capability::Int64);
+        } else {
+            add_cap(&mut builder, &mut enabled_capabilities, Capability::Shader);
+            if memory_model == MemoryModel::Vulkan {
+                if version < (1, 5) {
+                    add_ext(&mut builder, sym.spv_khr_vulkan_memory_model);
+                }
+                add_cap(
+                    &mut builder,
+                    &mut enabled_capabilities,
+                    Capability::VulkanMemoryModel,
+                );
+            }
         }
 
         // The linker will always be ran on this module
         add_cap(&mut builder, &mut enabled_capabilities, Capability::Linkage);
 
-        builder.memory_model(AddressingModel::Logical, memory_model);
+        let addressing_model = if memory_model == MemoryModel::OpenCL {
+            AddressingModel::Physical64
+        } else {
+            AddressingModel::Logical
+        };
+        builder.memory_model(addressing_model, memory_model);
 
         Self {
             source_map: tcx.sess.source_map(),
