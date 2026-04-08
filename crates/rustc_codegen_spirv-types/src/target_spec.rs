@@ -86,9 +86,15 @@ impl TargetSpecVersion {
         // OpenCL targets use Physical64 addressing with 64-bit pointers.
         let is_opencl = target_env.starts_with("opencl");
         let (data_layout, pointer_width_raw) = if is_opencl {
-            ("e-m:e-p:64:64:64-i64:64-n8:16:32:64", 64_u32)
+            (
+                "e-m:e-p:64:64:64-i64:64-n8:16:32:64",
+                64_u32,
+            )
         } else {
-            ("e-m:e-p:32:32:32-i64:64-n8:16:32:64", 32_u32)
+            (
+                "e-m:e-p:32:32:32-i64:64-n8:16:32:64",
+                32_u32,
+            )
         };
         let (extra, target_pointer_width) = match self {
             TargetSpecVersion::Older => panic!("no target specs for older rustc versions"),
