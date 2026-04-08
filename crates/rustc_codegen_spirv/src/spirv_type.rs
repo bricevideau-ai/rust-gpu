@@ -229,6 +229,11 @@ impl SpirvType<'_> {
     }
 
     fn decorate_array_stride(result: u32, element: u32, cx: &CodegenCx<'_>) {
+        // ArrayStride decoration requires the Shader capability. For Kernel
+        // targets (OpenCL), array layout follows the platform's default rules.
+        if cx.builder.has_capability(rspirv::spirv::Capability::Kernel) {
+            return;
+        }
         let mut emit = cx.emit_global();
         let ty = cx.lookup_type(element);
         if let Some(element_size) = ty.physical_size(cx) {
