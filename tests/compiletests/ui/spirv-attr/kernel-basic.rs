@@ -59,9 +59,14 @@ pub fn kernel_with_threads(#[spirv(global_invocation_id)] _id: USizeVec3) {}
 /// Kernel with a mutable slice parameter (CrossWorkgroup).
 /// Slices decompose into (data pointer, length) kernel arguments.
 #[spirv(kernel)]
-pub fn kernel_with_slice(#[spirv(cross_workgroup)] data: &mut [u32]) {
+pub fn kernel_with_slice(
+    #[spirv(global_invocation_id)] id: UVec3,
+    #[spirv(cross_workgroup)] data: &mut [u32],
+) {
+    let index = id.x as usize;
     unsafe {
-        *data.as_mut_ptr() = 42;
+        let ptr = data.as_mut_ptr().add(index);
+        *ptr = *ptr * 2;
     }
 }
 
