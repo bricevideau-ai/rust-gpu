@@ -2,7 +2,7 @@
 // HACK(eddyb) can't easily see warnings otherwise from `spirv-builder` builds.
 #![deny(warnings)]
 
-use glam::U64Vec3;
+use glam::USizeVec3;
 use spirv_std::{glam, spirv};
 
 // Adapted from the compute-shader example for OpenCL kernels.
@@ -47,9 +47,9 @@ pub fn collatz(mut n: u32) -> Option<u32> {
 //
 #[spirv(kernel)]
 pub fn main_kernel(
-    #[spirv(global_invocation_id)] id: U64Vec3,
+    #[spirv(global_invocation_id)] id: USizeVec3,
     #[spirv(cross_workgroup)] prime_indices: &mut [u32],
 ) {
-    let index = id.x as usize;
+    let index = id.x;
     prime_indices[index] = collatz(prime_indices[index]).unwrap_or(u32::MAX);
 }
