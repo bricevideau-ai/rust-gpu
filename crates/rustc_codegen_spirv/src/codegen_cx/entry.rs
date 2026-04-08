@@ -456,7 +456,12 @@ impl<'tcx> CodegenCx<'tcx> {
             value_layout,
             storage_class,
             read_only,
-        } = self.entry_param_deduce_from_rust_ref_or_value(execution_model, entry_arg_abi.layout, hir_param, &attrs);
+        } = self.entry_param_deduce_from_rust_ref_or_value(
+            execution_model,
+            entry_arg_abi.layout,
+            hir_param,
+            &attrs,
+        );
         let value_spirv_type = value_layout.spirv_type(hir_param.ty_span, self);
 
         let (var_id, spec_const_id) = match storage_class {
@@ -527,7 +532,10 @@ impl<'tcx> CodegenCx<'tcx> {
         // makes the SPIR-V type sized while the Rust layout is unsized, and
         // for `#[spirv(runtime_array)]` intrinsics (sized in Rust, unsized
         // in SPIR-V).
-        if !self.builder.has_capability(rspirv::spirv::Capability::Kernel) {
+        if !self
+            .builder
+            .has_capability(rspirv::spirv::Capability::Kernel)
+        {
             assert_eq!(
                 is_pair && is_spirv_unsized,
                 is_unsized_with_len,
@@ -609,8 +617,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 None,
             );
             if let hir::PatKind::Binding(_, _, ident, _) = &hir_param.pat.kind {
-                self.emit_global()
-                    .name(len_var, format!("{}.len", ident));
+                self.emit_global().name(len_var, format!("{}.len", ident));
             }
 
             // Add both to entry point interface.
@@ -621,19 +628,14 @@ impl<'tcx> CodegenCx<'tcx> {
             let len_value = bx.load(
                 len_spirv_type,
                 len_var.with_type(len_ptr_spirv_type),
-                rustc_abi::Align::from_bytes(
-                    (self.tcx.sess.target.pointer_width as u64) / 8,
-                )
-                .unwrap(),
+                rustc_abi::Align::from_bytes((self.tcx.sess.target.pointer_width as u64) / 8)
+                    .unwrap(),
             );
 
             // Pass (pointer, length) pair. For Kernel targets, [T] is
             // represented as element_type, so the pointer types match
             // directly between the entry stub and the inner function.
-            call_args.extend([
-                data_var.with_type(data_ptr_spirv_type),
-                len_value,
-            ]);
+            call_args.extend([data_var.with_type(data_ptr_spirv_type), len_value]);
             return;
         }
 
