@@ -1133,6 +1133,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-runner-opencl-builder"
+version = "0.0.0"
+dependencies = [
+ "spirv-builder",
+]
+
+[[package]]
 name = "example-runner-wgpu"
 version = "0.0.0"
 dependencies = [
@@ -1924,6 +1931,13 @@ dependencies = [
  "futures-util",
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kernel-shader"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
 ]
 
 [[package]]

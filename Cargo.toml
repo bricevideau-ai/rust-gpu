@@ -14,6 +14,8 @@ members = [
     "examples/shaders/sky-shader",
     "examples/shaders/simplest-shader",
     "examples/shaders/compute-shader",
+    "examples/shaders/kernel-shader",
+    "examples/runners/opencl-builder",
     "examples/shaders/mouse-shader",
     "examples/multibuilder",
     "examples/run-wasm",
