@@ -640,10 +640,18 @@ fn trans_aggregate<'tcx>(cx: &CodegenCx<'tcx>, span: Span, ty: TyAndLayout<'tcx>
                 // There's a potential for this array to be sized, but the element to be unsized, e.g. `[[u8]; 5]`.
                 // However, I think rust disallows all these cases, so assert this here.
                 assert_eq!(count, 0);
-                SpirvType::RuntimeArray {
-                    element: element_type,
+                if cx.builder.has_capability(rspirv::spirv::Capability::Kernel) {
+                    // For Kernel targets (Physical64 addressing), [T] is just the
+                    // element type — OpTypeRuntimeArray requires the Shader
+                    // capability. Pointers to [T] become pointers to T, and array
+                    // indexing is pointer arithmetic.
+                    element_type
+                } else {
+                    SpirvType::RuntimeArray {
+                        element: element_type,
+                    }
+                    .def(span, cx)
                 }
-                .def(span, cx)
             } else if count == 0 {
                 // spir-v doesn't support zero-sized arrays
                 create_zst(cx, span, ty)
