@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that non-immediate (i.e. not one of scalar/scalar-pair/vector) inputs
 // get properly copied out of the global (`Input`) `OpVariable` and mutation is
 // only ever done on `fn`-local `OpVariable`s, not on the original global.

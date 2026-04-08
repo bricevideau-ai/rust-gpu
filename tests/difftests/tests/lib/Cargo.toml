@@ -31,5 +31,10 @@ futures = "0.3.31"
 bytemuck = "1.21.0"
 anyhow = "1.0.98"
 
+# OpenCL backend is Linux-only — Windows requires a vendor-specific ICD that
+# isn't on standard CI runners, and Apple has deprecated OpenCL.
+[target.'cfg(target_os = "linux")'.dependencies]
+opencl3 = "0.12"
+
 [lints]
 workspace = true

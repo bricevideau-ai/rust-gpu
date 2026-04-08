@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that constant integer from casts are optimized to avoid creating intermediate
 // types that would require additional capabilities (e.g., Int8 capability for u8).
 

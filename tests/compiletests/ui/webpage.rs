@@ -1,4 +1,7 @@
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
+// (uses `storage_buffer` / descriptor sets — Shader/Vulkan-only, no OpenCL Kernel equivalent)
 
 use glam::UVec3;
 use spirv_std::spirv;

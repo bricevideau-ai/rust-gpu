@@ -8,6 +8,10 @@ pub struct BufferConfig {
     pub size: u64,
     pub usage: BufferUsage,
     pub initial_data: Option<Vec<u8>>,
+    /// Size in bytes of one element. Used by `OpenCL` to compute the element
+    /// count passed as the slice-length kernel argument (`size / element_size`).
+    /// Vulkan backends ignore this (they use `OpArrayLength`).
+    pub element_size: usize,
 }
 
 impl BufferConfig {
@@ -16,6 +20,16 @@ impl BufferConfig {
             size: size as u64,
             usage: BufferUsage::Storage,
             initial_data: None,
+            element_size: 1,
+        }
+    }
+
+    pub fn writeback_typed<A: bytemuck::NoUninit>(count: usize) -> Self {
+        Self {
+            size: (count * std::mem::size_of::<A>()) as u64,
+            usage: BufferUsage::Storage,
+            initial_data: None,
+            element_size: std::mem::size_of::<A>(),
         }
     }
 
@@ -25,6 +39,7 @@ impl BufferConfig {
             size: vec.len() as u64,
             usage: BufferUsage::StorageReadOnly,
             initial_data: Some(vec),
+            element_size: std::mem::size_of::<A>(),
         }
     }
 }
@@ -100,14 +115,20 @@ impl<B: ComputeBackend> ComputeTest<B> {
     pub fn run_test(self, config: &Config) -> Result<()> {
         let buffers = self.buffers.clone();
         let outputs = self.run()?;
-        // Write the first storage buffer output to the file
-        for (output, buffer_config) in outputs.iter().zip(&buffers) {
-            if matches!(buffer_config.usage, BufferUsage::Storage) && !output.is_empty() {
-                config.write_result(output)?;
-                return Ok(());
-            }
+        // Concatenate every storage-buffer output, matching the wgpu runner's
+        // append-all-output-buffers semantics so cross-backend diffs compare
+        // the same bytes.
+        let output: Vec<u8> = outputs
+            .iter()
+            .zip(&buffers)
+            .filter(|(_, cfg)| matches!(cfg.usage, BufferUsage::Storage))
+            .flat_map(|(out, _)| out.iter().copied())
+            .collect();
+        if output.is_empty() {
+            anyhow::bail!("No storage buffer output found")
         }
-        anyhow::bail!("No storage buffer output found")
+        config.write_result(&output)?;
+        Ok(())
     }
 }
 
@@ -137,16 +158,22 @@ impl<B: ComputeBackend, S: SpirvShader> ComputeShaderTest<B, S> {
     pub fn run_test(self, config: &Config) -> Result<()> {
         let buffers = self.buffers.clone();
         let outputs = self.run()?;
-        // Write the first storage buffer output to the file
-        for (output, buffer_config) in outputs.iter().zip(&buffers) {
-            if matches!(buffer_config.usage, BufferUsage::Storage) && !output.is_empty() {
-                use std::fs::File;
-                use std::io::Write;
-                let mut f = File::create(&config.output_path)?;
-                f.write_all(output)?;
-                return Ok(());
-            }
+        // Concatenate every storage-buffer output, matching the wgpu runner's
+        // append-all-output-buffers semantics so cross-backend diffs compare
+        // the same bytes.
+        let output: Vec<u8> = outputs
+            .iter()
+            .zip(&buffers)
+            .filter(|(_, cfg)| matches!(cfg.usage, BufferUsage::Storage))
+            .flat_map(|(out, _)| out.iter().copied())
+            .collect();
+        if output.is_empty() {
+            anyhow::bail!("No storage buffer output found")
         }
-        anyhow::bail!("No storage buffer output found")
+        use std::fs::File;
+        use std::io::Write;
+        let mut f = File::create(&config.output_path)?;
+        f.write_all(&output)?;
+        Ok(())
     }
 }

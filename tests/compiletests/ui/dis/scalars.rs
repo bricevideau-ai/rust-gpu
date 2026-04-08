@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "scalars"]
 
 // Tests all the (supported) Rust integer/floating-point scalar types.

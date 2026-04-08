@@ -708,9 +708,11 @@ mod tests {
         let test_case_dir = temp_dir.path().join("single_pkg");
         fs::create_dir(&test_case_dir).expect("failed to create test_case dir");
         let pkg_dir = test_case_dir.join("pkg1");
-        fs::create_dir(&pkg_dir).expect("failed to create pkg1");
+        fs::create_dir_all(pkg_dir.join("src")).expect("failed to create pkg1/src");
         fs::write(pkg_dir.join("Cargo.toml"), "[package]\nname = \"pkg1\"")
             .expect("failed to write Cargo.toml for pkg1");
+        fs::write(pkg_dir.join("src/main.rs"), "fn main() {}")
+            .expect("failed to write main.rs for pkg1");
         let test_case = TestCase::try_new(temp_dir.path(), Path::new("single_pkg"))
             .unwrap()
             .unwrap();
@@ -727,13 +729,17 @@ mod tests {
         let test_case_dir = temp_dir.path().join("dup_pkg");
         fs::create_dir(&test_case_dir).expect("failed to create test_case dir");
         let pkg1_dir = test_case_dir.join("pkg1");
-        fs::create_dir(&pkg1_dir).expect("failed to create pkg1");
+        fs::create_dir_all(pkg1_dir.join("src")).expect("failed to create pkg1/src");
         fs::write(pkg1_dir.join("Cargo.toml"), "[package]\nname = \"dup_pkg\"")
             .expect("failed to write Cargo.toml for pkg1");
+        fs::write(pkg1_dir.join("src/main.rs"), "fn main() {}")
+            .expect("failed to write main.rs for pkg1");
         let pkg2_dir = test_case_dir.join("pkg2");
-        fs::create_dir(&pkg2_dir).expect("failed to create pkg2");
+        fs::create_dir_all(pkg2_dir.join("src")).expect("failed to create pkg2/src");
         fs::write(pkg2_dir.join("Cargo.toml"), "[package]\nname = \"dup_pkg\"")
             .expect("failed to write Cargo.toml for pkg2");
+        fs::write(pkg2_dir.join("src/main.rs"), "fn main() {}")
+            .expect("failed to write main.rs for pkg2");
         let runner = dummy_runner();
         let test_case = TestCase::try_new(temp_dir.path(), Path::new("dup_pkg"))
             .unwrap()

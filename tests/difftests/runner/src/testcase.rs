@@ -56,10 +56,15 @@ impl TestCase {
                 debug!("Ignoring test binary: {}", path.display());
                 return Ok(());
             }
-            if path.is_dir() && path.join("Cargo.toml").exists() {
+            if path.is_dir()
+                && path.join("Cargo.toml").exists()
+                && path.join("src/main.rs").exists()
+            {
                 debug!("Found binary package candidate: {}", path.display());
                 self.test_binaries
                     .push(TestBinary::new(self, Path::new(&entry.file_name())));
+            } else if path.is_dir() && path.join("Cargo.toml").exists() {
+                debug!("Skipping helper crate (no src/main.rs): {}", path.display());
             }
         }
         Ok(())
@@ -161,13 +166,17 @@ mod tests {
         let test_case_dir = base.join("test_case");
         fs::create_dir(&test_case_dir).expect("failed to create test_case dir");
         let pkg1_dir = test_case_dir.join("pkg1");
-        fs::create_dir(&pkg1_dir).expect("failed to create pkg1");
+        fs::create_dir_all(pkg1_dir.join("src")).expect("failed to create pkg1/src");
         fs::write(pkg1_dir.join("Cargo.toml"), "[package]\nname = \"pkg1\"")
             .expect("failed to write Cargo.toml for pkg1");
+        fs::write(pkg1_dir.join("src/main.rs"), "fn main() {}")
+            .expect("failed to write main.rs for pkg1");
         let pkg2_dir = test_case_dir.join("pkg2");
-        fs::create_dir(&pkg2_dir).expect("failed to create pkg2");
+        fs::create_dir_all(pkg2_dir.join("src")).expect("failed to create pkg2/src");
         fs::write(pkg2_dir.join("Cargo.toml"), "[package]\nname = \"pkg2\"")
             .expect("failed to write Cargo.toml for pkg2");
+        fs::write(pkg2_dir.join("src/main.rs"), "fn main() {}")
+            .expect("failed to write main.rs for pkg2");
         let mut test_dirs = collect_test_dirs(base).expect("failed to collect test dirs");
 
         assert_eq!(test_dirs.len(), 1);
@@ -188,5 +197,42 @@ mod tests {
             Path::new("test_case/pkg2")
         );
         assert_eq!(test_case.test_binaries[1].absolute_path, pkg2_dir);
+    }
+
+    #[test]
+    fn test_skip_helper_crate_without_main() {
+        // A directory containing a Cargo.toml but no src/main.rs is a helper
+        // (lib-only) crate, not a test variant — must not be picked up.
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let base = temp_dir.path();
+        let test_case_dir = base.join("test_case");
+        fs::create_dir(&test_case_dir).expect("failed to create test_case dir");
+
+        // Bin variant.
+        let bin_dir = test_case_dir.join("variant-bin");
+        fs::create_dir_all(bin_dir.join("src")).expect("failed to create variant-bin/src");
+        fs::write(
+            bin_dir.join("Cargo.toml"),
+            "[package]\nname = \"variant-bin\"",
+        )
+        .expect("failed to write Cargo.toml for variant-bin");
+        fs::write(bin_dir.join("src/main.rs"), "fn main() {}")
+            .expect("failed to write main.rs for variant-bin");
+
+        // Helper lib (no src/main.rs) — should be skipped.
+        let helper_dir = test_case_dir.join("variant-shared");
+        fs::create_dir_all(helper_dir.join("src")).expect("failed to create variant-shared/src");
+        fs::write(
+            helper_dir.join("Cargo.toml"),
+            "[package]\nname = \"variant-shared\"",
+        )
+        .expect("failed to write Cargo.toml for variant-shared");
+        fs::write(helper_dir.join("src/lib.rs"), "")
+            .expect("failed to write lib.rs for variant-shared");
+
+        let test_dirs = collect_test_dirs(base).expect("failed to collect test dirs");
+        assert_eq!(test_dirs.len(), 1);
+        assert_eq!(test_dirs[0].test_binaries.len(), 1);
+        assert_eq!(test_dirs[0].test_binaries[0].absolute_path, bin_dir);
     }
 }

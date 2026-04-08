@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // FIXME(eddyb) this is like `zst_member_ref_arg`, but testing the error messages
 // in some broken cases (see issue #1037) - this test should eventually pass, but
 // for now we care more that the error messages do not regress too much.

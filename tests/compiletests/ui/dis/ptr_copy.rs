@@ -4,6 +4,8 @@
 // normalize-stderr-test "\S*/library/core/src/" -> "$$CORE_SRC/"
 //[via_intrinsic] build-pass
 // compile-flags: -C llvm-args=--disassemble-fn=ptr_copy::copy_via_raw_ptr
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 #![cfg_attr(via_intrinsic, allow(internal_features), feature(intrinsics))]
 

@@ -37,11 +37,13 @@ fn main() {
             size: 512, // 128 f32 values
             usage: BufferUsage::StorageReadOnly,
             initial_data: Some(input_bytes),
+            element_size: 1,
         },
         BufferConfig {
             size: 6400, // 1600 f32 values (32 threads * 50 outputs each)
             usage: BufferUsage::Storage,
             initial_data: None,
+            element_size: 1,
         },
     ];
 

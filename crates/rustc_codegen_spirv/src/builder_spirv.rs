@@ -441,6 +441,55 @@ pub struct BuilderSpirv<'tcx> {
     id_to_const: RefCell<FxHashMap<Word, WithConstLegality<SpirvConst<'tcx, 'tcx>>>>,
 
     debug_file_cache: RefCell<FxHashMap<DebugFileKey, DebugFileSpirv<'tcx>>>,
+
+    /// Whether this module targets an `OpenCL` Kernel environment, derived from
+    /// the target's memory model rather than the declared capability set.
+    kernel_mode: bool,
+}
+
+/// Validate that a capability is allowed by the `OpenCL` SPIR-V environment specification.
+/// Reference: <https://registry.khronos.org/OpenCL/specs/3.0-unified/html/OpenCL_Env.html>
+fn validate_opencl_capability(cap: Capability, target: &SpirvTarget, tcx: TyCtxt<'_>) {
+    let allowed = match cap {
+        // Allowed for any OpenCL target: mandatory capabilities, device-dependent
+        // floating-point, and image capabilities.
+        Capability::Addresses
+        | Capability::Float16Buffer
+        | Capability::Int8
+        | Capability::Int16
+        | Capability::Int64
+        | Capability::Kernel
+        | Capability::Linkage
+        | Capability::Vector16
+        | Capability::Float16
+        | Capability::Float64
+        | Capability::ImageBasic
+        | Capability::LiteralSampler
+        | Capability::Sampled1D
+        | Capability::Image1D
+        | Capability::SampledBuffer
+        | Capability::ImageBuffer => true,
+
+        // OpenCL 2.0+ capabilities (device-dependent).
+        Capability::DeviceEnqueue
+        | Capability::GenericPointer
+        | Capability::Groups
+        | Capability::Pipes
+        | Capability::ImageReadWrite => target.is_opencl_2_0_or_later(),
+
+        // OpenCL 2.2+ capabilities (SPIR-V 1.1+).
+        Capability::SubgroupDispatch | Capability::PipeStorage => target.is_opencl_2_2_or_later(),
+
+        // Everything else is not part of the OpenCL SPIR-V environment.
+        _ => false,
+    };
+
+    if !allowed {
+        let target_env = target.to_spirv_tools();
+        tcx.dcx().err(format!(
+            "capability `{cap:?}` is not allowed by the `{target_env:?}` environment specification"
+        ));
+    }
 }
 
 impl<'tcx> BuilderSpirv<'tcx> {
@@ -460,6 +509,9 @@ impl<'tcx> BuilderSpirv<'tcx> {
         for feature in features {
             match *feature {
                 TargetFeature::Capability(cap) => {
+                    if target.is_opencl() {
+                        validate_opencl_capability(cap, target, tcx);
+                    }
                     builder.capability(cap);
                 }
                 TargetFeature::Extension(ext) => {
@@ -468,16 +520,35 @@ impl<'tcx> BuilderSpirv<'tcx> {
             }
         }
 
-        builder.capability(Capability::Shader);
-        if memory_model == MemoryModel::Vulkan {
-            if version < SpirvVersion::V1_5 {
-                builder.extension(sym.spv_khr_vulkan_memory_model.as_str());
+        if memory_model == MemoryModel::OpenCL {
+            // Mandatory capabilities per the OpenCL SPIR-V Environment Specification
+            // (Section 3: Required Capabilities). These must be supported by all
+            // OpenCL implementations and are always declared.
+            builder.capability(Capability::Addresses);
+            builder.capability(Capability::Float16Buffer);
+            builder.capability(Capability::Int8);
+            builder.capability(Capability::Int16);
+            builder.capability(Capability::Int64);
+            builder.capability(Capability::Kernel);
+            builder.capability(Capability::Vector16);
+        } else {
+            builder.capability(Capability::Shader);
+            if memory_model == MemoryModel::Vulkan {
+                if version < SpirvVersion::V1_5 {
+                    builder.extension(sym.spv_khr_vulkan_memory_model.as_str());
+                }
+                builder.capability(Capability::VulkanMemoryModel);
             }
-            builder.capability(Capability::VulkanMemoryModel);
         }
         // The linker will always be ran on this module
         builder.capability(Capability::Linkage);
-        builder.memory_model(AddressingModel::Logical, memory_model);
+
+        let addressing_model = if memory_model == MemoryModel::OpenCL {
+            AddressingModel::Physical64
+        } else {
+            AddressingModel::Logical
+        };
+        builder.memory_model(addressing_model, memory_model);
 
         Self {
             source_map: tcx.sess.source_map(),
@@ -486,6 +557,7 @@ impl<'tcx> BuilderSpirv<'tcx> {
             const_to_id: Default::default(),
             id_to_const: Default::default(),
             debug_file_cache: Default::default(),
+            kernel_mode: memory_model == MemoryModel::OpenCL,
         }
     }
 
@@ -504,6 +576,13 @@ impl<'tcx> BuilderSpirv<'tcx> {
             .unwrap()
             .write_all(spirv_tools::binary::from_binary(&module))
             .unwrap();
+    }
+
+    /// Whether codegen targets an `OpenCL` Kernel environment (as opposed to a
+    /// Shader environment). Derived from the target's memory model, so it does
+    /// not depend on which capabilities have been declared.
+    pub fn is_kernel_mode(&self) -> bool {
+        self.kernel_mode
     }
 
     /// See comment on `BuilderCursor`

@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that constant narrowing casts (e.g., u32 to u8) still work correctly
 // and produce the expected truncation behavior.
 
