@@ -30,6 +30,13 @@ pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
     // This algorithm gets real sad if there's recursion - but, good news, SPIR-V bans recursion
     deny_recursion_in_module(sess, module)?;
 
+    // For Kernel targets, force-inline all function calls. Some OpenCL drivers
+    // (e.g. Intel NEO/IGC) do not handle OpFunctionCall in kernel modules well.
+    let force_all_inline = module
+        .capabilities
+        .iter()
+        .any(|inst| inst.operands[0].unwrap_capability() == rspirv::spirv::Capability::Kernel);
+
     // Compute the call-graph that will drive (inside-out, aka bottom-up) inlining.
     let (call_graph, func_id_to_idx) = CallGraph::collect_with_func_id_to_idx(module);
 
@@ -124,6 +131,8 @@ pub fn inline(sess: &Session, module: &mut Module) -> super::Result<()> {
                     .then_some(func.def_id().unwrap())
             })
             .collect(),
+
+        force_all_inline,
 
         inlined_dont_inlines_to_cause_and_callers: FxIndexMap::default(),
     };
@@ -387,6 +396,7 @@ fn should_inline(
     functions_that_may_abort: &FxHashSet<Word>,
     callee: &Function,
     call_site: CallSite<'_>,
+    force_all_inline: bool,
 ) -> Result<bool, MustInlineToLegalize> {
     let callee_def = callee.def.as_ref().unwrap();
     let callee_control = callee_def.operands[0].unwrap_function_control();
@@ -454,7 +464,7 @@ fn should_inline(
         }
     }
 
-    Ok(callee_control.contains(FunctionControl::INLINE))
+    Ok(force_all_inline || callee_control.contains(FunctionControl::INLINE))
 }
 
 /// Helper error type for `Inliner`'s `functions` field, indicating a `Function`
@@ -495,6 +505,7 @@ struct Inliner<'a, 'b> {
 
     legal_globals: FxHashMap<Word, LegalGlobal>,
     functions_that_may_abort: FxHashSet<Word>,
+    force_all_inline: bool,
     inlined_dont_inlines_to_cause_and_callers: FxIndexMap<Word, (&'static str, FxIndexSet<Word>)>,
     // rewrite_rules: FxHashMap<Word, Word>,
 }
@@ -569,6 +580,7 @@ impl Inliner<'_, '_> {
                     &self.functions_that_may_abort,
                     f,
                     call_site,
+                    self.force_all_inline,
                 ) {
                     Ok(inline) => inline,
                     Err(MustInlineToLegalize(cause)) => {
