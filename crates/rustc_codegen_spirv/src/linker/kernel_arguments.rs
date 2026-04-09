@@ -346,23 +346,28 @@ fn fix_builtin_types(module: &mut Module) {
         return;
     }
 
-    // Add Constant decoration for builtin variables (required by some impls).
-    for &var_id in &builtin_var_ids {
-        let has_constant = module.annotations.iter().any(|inst| {
-            inst.class.opcode == Op::Decorate
-                && inst.operands[0].unwrap_id_ref() == var_id
-                && inst.operands[1].unwrap_decoration() == Decoration::Constant
-        });
-        if !has_constant {
-            module.annotations.push(Instruction::new(
-                Op::Decorate,
-                None,
-                None,
-                vec![
-                    Operand::IdRef(var_id),
-                    Operand::Decoration(Decoration::Constant),
-                ],
-            ));
+    // Skip the Constant decoration for Kernel targets: it is not valid on
+    // Input storage class variables per the SPIR-V spec (only UniformConstant)
+    // and causes Intel NEO (IGC) to fail with CL_OUT_OF_HOST_MEMORY.
+    if !has_kernel {
+        // Add Constant decoration for builtin variables (required by some impls).
+        for &var_id in &builtin_var_ids {
+            let has_constant = module.annotations.iter().any(|inst| {
+                inst.class.opcode == Op::Decorate
+                    && inst.operands[0].unwrap_id_ref() == var_id
+                    && inst.operands[1].unwrap_decoration() == Decoration::Constant
+            });
+            if !has_constant {
+                module.annotations.push(Instruction::new(
+                    Op::Decorate,
+                    None,
+                    None,
+                    vec![
+                        Operand::IdRef(var_id),
+                        Operand::Decoration(Decoration::Constant),
+                    ],
+                ));
+            }
         }
     }
 
