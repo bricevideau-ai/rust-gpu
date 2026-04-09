@@ -36,6 +36,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "test4_real_kernel",
             include_bytes!("../spv/test4_real_kernel.spv"),
         ),
+        (
+            "test5_clang",
+            include_bytes!("../spv/test5_clang.spv"),
+        ),
     ];
 
     let context = Context::from_device(&device)?;
