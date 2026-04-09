@@ -39,7 +39,12 @@ jobs:
         run: sudo apt install libwayland-cursor0 libxkbcommon-dev libwayland-dev pocl-opencl-icd ocl-icd-opencl-dev
       - if: ${{ runner.os == 'macOS' }}
         name: macOS - Install OpenCL dependencies
-        run: brew install pocl
+        run: |
+          brew install pocl
+          POCL_INSTALL_PATH=$(brew --prefix pocl)
+          echo "OCL_ICD_VENDORS=$POCL_INSTALL_PATH/etc/OpenCL/vendors" >> $GITHUB_ENV
+          SDKROOT=$(xcrun --show-sdk-path)
+          echo "SDKROOT=$SDKROOT" >> $GITHUB_ENV
       # just need a random command that forces the installation of rust-toolchain
       # figure out native target triple while we're at it
       - name: install rust-toolchain
@@ -59,6 +64,14 @@ jobs:
 
       - name: workspace test (excluding examples)
         run: cargo test --release --workspace --exclude "example-runner-*" --no-default-features --features "use-installed-tools,clap"
+
+      # OpenCL — run early to iterate faster on failures
+      - name: build OpenCL kernel shader
+        run: cargo run -p example-runner-opencl-builder --release --no-default-features --features "use-installed-tools"
+
+      - if: ${{ runner.os != 'Windows' }}
+        name: run OpenCL kernel on pocl
+        run: cargo run -p example-runner-opencl --release --no-default-features --features "use-installed-tools"
 
       # Examples
       - name: cargo check examples
@@ -81,13 +94,6 @@ jobs:
           PROFILE: debug
           OUT_DIR: "target/debug/ci/out"
         run: cargo run -p example-runner-wgpu-builder --no-default-features --features "use-installed-tools"
-
-      - name: build OpenCL kernel shader
-        run: cargo run -p example-runner-opencl-builder --release --no-default-features --features "use-installed-tools"
-
-      - if: ${{ runner.os != 'Windows' }}
-        name: run OpenCL kernel on pocl
-        run: cargo run -p example-runner-opencl --release --no-default-features --features "use-installed-tools"
 
   android:
     name: Android
