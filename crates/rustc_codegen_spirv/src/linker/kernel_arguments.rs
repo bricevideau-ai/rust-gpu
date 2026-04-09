@@ -22,7 +22,9 @@
 //! ```
 
 use rspirv::dr::{Instruction, Module, Operand};
-use rspirv::spirv::{AddressingModel, BuiltIn, Decoration, ExecutionModel, Op, StorageClass};
+use rspirv::spirv::{
+    AddressingModel, BuiltIn, Capability, Decoration, ExecutionModel, Op, StorageClass,
+};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 
 /// Convert Kernel entry points from global-`OpVariable` to `OpFunctionParameter`,
@@ -490,6 +492,42 @@ fn fix_builtin_types(module: &mut Module) {
             for (idx, inst) in insertions.into_iter().rev() {
                 block.instructions.insert(idx, inst);
             }
+        }
+    }
+}
+
+/// Replace `OpUndef` with `OpConstantNull` for Kernel targets.
+///
+/// Some OpenCL drivers (e.g. Intel NEO/IGC) do not handle `OpUndef` well in
+/// kernel SPIR-V modules, particularly when used in `OpPhi` nodes or with
+/// composite types. `OpConstantNull` produces a zero-initialized value which
+/// is semantically safe for the code paths where undef values appear (they are
+/// either overwritten or on dead paths).
+pub fn replace_undef_with_null(module: &mut Module) {
+    let has_kernel = module
+        .capabilities
+        .iter()
+        .any(|inst| inst.operands[0].unwrap_capability() == Capability::Kernel);
+    if !has_kernel {
+        return;
+    }
+
+    // Collect all OpUndef instructions and their result IDs/types.
+    let undefs: Vec<(u32, u32)> = module
+        .types_global_values
+        .iter()
+        .filter(|inst| inst.class.opcode == Op::Undef)
+        .map(|inst| (inst.result_id.unwrap(), inst.result_type.unwrap()))
+        .collect();
+
+    if undefs.is_empty() {
+        return;
+    }
+
+    // Replace each OpUndef with OpConstantNull of the same type.
+    for inst in &mut module.types_global_values {
+        if inst.class.opcode == Op::Undef {
+            inst.class = rspirv::grammar::CoreInstructionTable::get(Op::ConstantNull);
         }
     }
 }

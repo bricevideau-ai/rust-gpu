@@ -679,6 +679,11 @@ pub fn link(
     }
 
     {
+        let _timer = sess.timer("link_replace_undef_with_null");
+        kernel_arguments::replace_undef_with_null(&mut output);
+    }
+
+    {
         let _timer = sess.timer("link_sort_globals");
         simple_passes::sort_globals(&mut output);
     }
