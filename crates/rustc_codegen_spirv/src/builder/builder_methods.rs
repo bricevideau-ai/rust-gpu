@@ -2401,7 +2401,13 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
             (SpirvType::Integer(_, _), SpirvType::Integer(_, dest_signedness)) => {
                 // spir-v spec doesn't seem to say that signedness needs to match the operands, only that the signedness
                 // of the destination type must match the instruction's signedness.
-                if dest_signedness {
+                // For Kernel targets, all emitted OpTypeInt have signedness=0,
+                // so we must use OpUConvert to match the unsigned destination type.
+                let use_signed = dest_signedness
+                    && !self
+                        .builder
+                        .has_capability(rspirv::spirv::Capability::Kernel);
+                if use_signed {
                     self.emit().s_convert(dest_ty, None, val.def(self))
                 } else {
                     self.emit().u_convert(dest_ty, None, val.def(self))
