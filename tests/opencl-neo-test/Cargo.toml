@@ -1,0 +1,10 @@
+[package]
+name = "opencl-neo-test"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+opencl3 = "0.12"
