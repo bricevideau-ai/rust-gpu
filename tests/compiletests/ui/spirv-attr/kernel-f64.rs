@@ -120,10 +120,7 @@ pub fn test_u64_from_f64(
 // Slice operations with f64.
 
 #[spirv(kernel)]
-pub fn test_f64_slice_access(
-    #[spirv(cross_workgroup)] data: &mut [f64],
-    index: u32,
-) {
+pub fn test_f64_slice_access(#[spirv(cross_workgroup)] data: &mut [f64], index: u32) {
     let i = index as usize;
     data[i] = data[i] * 2.0;
 }

@@ -6,7 +6,10 @@ use spirv_std::spirv;
 // Basic pointer dereference.
 
 #[spirv(kernel)]
-pub fn test_deref_read(#[spirv(cross_workgroup)] val: &u32, #[spirv(cross_workgroup)] out: &mut u32) {
+pub fn test_deref_read(
+    #[spirv(cross_workgroup)] val: &u32,
+    #[spirv(cross_workgroup)] out: &mut u32,
+) {
     *out = *val;
 }
 

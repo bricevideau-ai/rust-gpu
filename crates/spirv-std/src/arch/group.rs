@@ -167,50 +167,116 @@ macro_rules! group_op {
     };
 }
 
-group_op!(u32, "OpTypeInt 32 0", "OpGroupIAdd",
-    group_i_add, group_inclusive_i_add, group_exclusive_i_add,
-    "Integer add group operation.");
+group_op!(
+    u32,
+    "OpTypeInt 32 0",
+    "OpGroupIAdd",
+    group_i_add,
+    group_inclusive_i_add,
+    group_exclusive_i_add,
+    "Integer add group operation."
+);
 
-group_op!(f32, "OpTypeFloat 32", "OpGroupFAdd",
-    group_f_add, group_inclusive_f_add, group_exclusive_f_add,
-    "Float add group operation.");
+group_op!(
+    f32,
+    "OpTypeFloat 32",
+    "OpGroupFAdd",
+    group_f_add,
+    group_inclusive_f_add,
+    group_exclusive_f_add,
+    "Float add group operation."
+);
 
-group_op!(u32, "OpTypeInt 32 0", "OpGroupUMin",
-    group_u_min, group_inclusive_u_min, group_exclusive_u_min,
-    "Unsigned integer minimum group operation.");
+group_op!(
+    u32,
+    "OpTypeInt 32 0",
+    "OpGroupUMin",
+    group_u_min,
+    group_inclusive_u_min,
+    group_exclusive_u_min,
+    "Unsigned integer minimum group operation."
+);
 
-group_op!(u32, "OpTypeInt 32 0", "OpGroupUMax",
-    group_u_max, group_inclusive_u_max, group_exclusive_u_max,
-    "Unsigned integer maximum group operation.");
+group_op!(
+    u32,
+    "OpTypeInt 32 0",
+    "OpGroupUMax",
+    group_u_max,
+    group_inclusive_u_max,
+    group_exclusive_u_max,
+    "Unsigned integer maximum group operation."
+);
 
 // NOTE: Kernel capability requires signedness=0 for all OpTypeInt.
 // Sign is encoded in the operation (OpGroupSMin vs OpGroupUMin), not the type.
-group_op!(i32, "OpTypeInt 32 0", "OpGroupSMin",
-    group_s_min, group_inclusive_s_min, group_exclusive_s_min,
-    "Signed integer minimum group operation.");
+group_op!(
+    i32,
+    "OpTypeInt 32 0",
+    "OpGroupSMin",
+    group_s_min,
+    group_inclusive_s_min,
+    group_exclusive_s_min,
+    "Signed integer minimum group operation."
+);
 
-group_op!(i32, "OpTypeInt 32 0", "OpGroupSMax",
-    group_s_max, group_inclusive_s_max, group_exclusive_s_max,
-    "Signed integer maximum group operation.");
+group_op!(
+    i32,
+    "OpTypeInt 32 0",
+    "OpGroupSMax",
+    group_s_max,
+    group_inclusive_s_max,
+    group_exclusive_s_max,
+    "Signed integer maximum group operation."
+);
 
-group_op!(f32, "OpTypeFloat 32", "OpGroupFMin",
-    group_f_min, group_inclusive_f_min, group_exclusive_f_min,
-    "Float minimum group operation.");
+group_op!(
+    f32,
+    "OpTypeFloat 32",
+    "OpGroupFMin",
+    group_f_min,
+    group_inclusive_f_min,
+    group_exclusive_f_min,
+    "Float minimum group operation."
+);
 
-group_op!(f32, "OpTypeFloat 32", "OpGroupFMax",
-    group_f_max, group_inclusive_f_max, group_exclusive_f_max,
-    "Float maximum group operation.");
+group_op!(
+    f32,
+    "OpTypeFloat 32",
+    "OpGroupFMax",
+    group_f_max,
+    group_inclusive_f_max,
+    group_exclusive_f_max,
+    "Float maximum group operation."
+);
 
 // Double-precision (f64) variants.
 
-group_op!(f64, "OpTypeFloat 64", "OpGroupFAdd",
-    group_f64_add, group_inclusive_f64_add, group_exclusive_f64_add,
-    "Double-precision float add group operation.");
+group_op!(
+    f64,
+    "OpTypeFloat 64",
+    "OpGroupFAdd",
+    group_f64_add,
+    group_inclusive_f64_add,
+    group_exclusive_f64_add,
+    "Double-precision float add group operation."
+);
 
-group_op!(f64, "OpTypeFloat 64", "OpGroupFMin",
-    group_f64_min, group_inclusive_f64_min, group_exclusive_f64_min,
-    "Double-precision float minimum group operation.");
+group_op!(
+    f64,
+    "OpTypeFloat 64",
+    "OpGroupFMin",
+    group_f64_min,
+    group_inclusive_f64_min,
+    group_exclusive_f64_min,
+    "Double-precision float minimum group operation."
+);
 
-group_op!(f64, "OpTypeFloat 64", "OpGroupFMax",
-    group_f64_max, group_inclusive_f64_max, group_exclusive_f64_max,
-    "Double-precision float maximum group operation.");
+group_op!(
+    f64,
+    "OpTypeFloat 64",
+    "OpGroupFMax",
+    group_f64_max,
+    group_inclusive_f64_max,
+    group_exclusive_f64_max,
+    "Double-precision float maximum group operation."
+);

@@ -6,12 +6,20 @@ use spirv_std::spirv;
 // Float arithmetic.
 
 #[spirv(kernel)]
-pub fn test_f32_add(#[spirv(cross_workgroup)] a: &f32, #[spirv(cross_workgroup)] b: &f32, #[spirv(cross_workgroup)] out: &mut f32) {
+pub fn test_f32_add(
+    #[spirv(cross_workgroup)] a: &f32,
+    #[spirv(cross_workgroup)] b: &f32,
+    #[spirv(cross_workgroup)] out: &mut f32,
+) {
     *out = *a + *b;
 }
 
 #[spirv(kernel)]
-pub fn test_f32_mul(#[spirv(cross_workgroup)] a: &f32, #[spirv(cross_workgroup)] out: &mut f32, factor: f32) {
+pub fn test_f32_mul(
+    #[spirv(cross_workgroup)] a: &f32,
+    #[spirv(cross_workgroup)] out: &mut f32,
+    factor: f32,
+) {
     *out = *a * factor;
 }
 
@@ -72,5 +80,13 @@ pub fn test_bool_logic(
 ) {
     let x = *a != 0;
     let y = *b != 0;
-    *out = if x && y { 3 } else if x || y { 2 } else if !x { 1 } else { 0 };
+    *out = if x && y {
+        3
+    } else if x || y {
+        2
+    } else if !x {
+        1
+    } else {
+        0
+    };
 }

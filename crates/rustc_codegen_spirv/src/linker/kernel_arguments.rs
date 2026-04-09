@@ -437,7 +437,9 @@ fn fix_builtin_types(module: &mut Module) {
     // Change the BuiltIn OpVariable types from *Input v3uint to *Input v3ulong.
     for inst in &mut module.types_global_values {
         if inst.class.opcode == Op::Variable
-            && inst.result_id.is_some_and(|id| builtin_var_ids.contains(&id))
+            && inst
+                .result_id
+                .is_some_and(|id| builtin_var_ids.contains(&id))
             && inst.result_type == ptr_input_v3uint
         {
             inst.result_type = Some(ptr_input_v3ulong_ty);

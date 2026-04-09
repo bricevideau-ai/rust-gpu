@@ -12,7 +12,10 @@ struct Pair {
 }
 
 #[spirv(kernel)]
-pub fn test_struct(#[spirv(cross_workgroup)] out_x: &mut u32, #[spirv(cross_workgroup)] out_y: &mut u32) {
+pub fn test_struct(
+    #[spirv(cross_workgroup)] out_x: &mut u32,
+    #[spirv(cross_workgroup)] out_y: &mut u32,
+) {
     let p = Pair { x: 10, y: 20 };
     *out_x = p.x;
     *out_y = p.y;
@@ -52,11 +55,7 @@ pub fn test_tuple(#[spirv(cross_workgroup)] out: &mut u32) {
 // Option<T> — this tests the MemberDecorate Offset skip for Kernel.
 
 fn maybe_double(x: u32) -> Option<u32> {
-    if x == 0 {
-        None
-    } else {
-        Some(x * 2)
-    }
+    if x == 0 { None } else { Some(x * 2) }
 }
 
 #[spirv(kernel)]
@@ -65,7 +64,10 @@ pub fn test_option(#[spirv(cross_workgroup)] input: &u32, #[spirv(cross_workgrou
 }
 
 #[spirv(kernel)]
-pub fn test_option_map(#[spirv(cross_workgroup)] input: &u32, #[spirv(cross_workgroup)] out: &mut u32) {
+pub fn test_option_map(
+    #[spirv(cross_workgroup)] input: &u32,
+    #[spirv(cross_workgroup)] out: &mut u32,
+) {
     *out = maybe_double(*input).map(|v| v + 1).unwrap_or(0);
 }
 
@@ -104,7 +106,10 @@ fn swap(p: Pair) -> Pair {
 }
 
 #[spirv(kernel)]
-pub fn test_struct_fn(#[spirv(cross_workgroup)] out_x: &mut u32, #[spirv(cross_workgroup)] out_y: &mut u32) {
+pub fn test_struct_fn(
+    #[spirv(cross_workgroup)] out_x: &mut u32,
+    #[spirv(cross_workgroup)] out_y: &mut u32,
+) {
     let p = swap(Pair { x: 42, y: 99 });
     *out_x = p.x;
     *out_y = p.y;

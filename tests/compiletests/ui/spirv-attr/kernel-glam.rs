@@ -56,9 +56,7 @@ pub fn test_vec2_length(#[spirv(cross_workgroup)] out: &mut f32) {
 }
 
 #[spirv(kernel)]
-pub fn test_vec4_normalize(
-    #[spirv(cross_workgroup)] out: &mut f32,
-) {
+pub fn test_vec4_normalize(#[spirv(cross_workgroup)] out: &mut f32) {
     let v = glam::Vec4::new(1.0, 1.0, 1.0, 1.0);
     let n = v.normalize();
     *out = n.length();

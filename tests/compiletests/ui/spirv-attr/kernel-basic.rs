@@ -43,10 +43,7 @@ pub fn kernel_with_readonly_buffer(
 
 /// Kernel with a scalar by-value parameter (not a pointer).
 #[spirv(kernel)]
-pub fn kernel_with_scalar(
-    #[spirv(cross_workgroup)] buf: &mut u32,
-    factor: u32,
-) {
+pub fn kernel_with_scalar(#[spirv(cross_workgroup)] buf: &mut u32, factor: u32) {
     *buf *= factor;
 }
 

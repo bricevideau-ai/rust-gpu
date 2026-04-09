@@ -752,12 +752,11 @@ impl<'tcx> BuilderSpirv<'tcx> {
                 // Private — Private requires the Shader capability, while
                 // UniformConstant is valid for read-only globals in the Kernel
                 // execution model.
-                let storage_class =
-                    if self.has_capability(rspirv::spirv::Capability::Kernel) {
-                        StorageClass::UniformConstant
-                    } else {
-                        StorageClass::Private
-                    };
+                let storage_class = if self.has_capability(rspirv::spirv::Capability::Kernel) {
+                    StorageClass::UniformConstant
+                } else {
+                    StorageClass::Private
+                };
                 builder.variable(ty, None, storage_class, Some(pointee))
             }
         };

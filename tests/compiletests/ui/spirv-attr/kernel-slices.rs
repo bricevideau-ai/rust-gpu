@@ -6,7 +6,10 @@ use spirv_std::spirv;
 // Safe slice indexing.
 
 #[spirv(kernel)]
-pub fn test_safe_read(#[spirv(cross_workgroup)] data: &[u32], #[spirv(cross_workgroup)] out: &mut u32) {
+pub fn test_safe_read(
+    #[spirv(cross_workgroup)] data: &[u32],
+    #[spirv(cross_workgroup)] out: &mut u32,
+) {
     *out = data[0];
 }
 
@@ -30,7 +33,10 @@ pub fn test_len(#[spirv(cross_workgroup)] data: &[u32], #[spirv(cross_workgroup)
 // Multiple slice parameters.
 
 #[spirv(kernel)]
-pub fn test_copy_slice(#[spirv(cross_workgroup)] src: &[u32], #[spirv(cross_workgroup)] dst: &mut [u32]) {
+pub fn test_copy_slice(
+    #[spirv(cross_workgroup)] src: &[u32],
+    #[spirv(cross_workgroup)] dst: &mut [u32],
+) {
     dst[0] = src[0];
 }
 
