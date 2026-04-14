@@ -6,7 +6,7 @@ use opencl3::kernel::{ExecuteKernel, Kernel};
 use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
 use opencl3::program::Program;
 use opencl3::types::{CL_BLOCKING, cl_device_id};
-use spirv_builder::{CompileResult, SpirvBuilder};
+use spirv_builder::{Capability, CompileResult, SpirvBuilder};
 use std::path::Path;
 use std::ptr;
 use std::time::{Duration, Instant};
@@ -184,6 +184,17 @@ fn compile_kernel(path: &Path) -> Result<(Vec<u8>, Duration), Box<dyn std::error
     Ok((spv_bytes, start.elapsed()))
 }
 
+/// Compile a kernel crate with `Float64` capability.
+fn compile_kernel_fp64(path: &Path) -> Result<(Vec<u8>, Duration), Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    let result: CompileResult = SpirvBuilder::new(path, "spirv-unknown-opencl1.2")
+        .capability(Capability::Float64)
+        .build()?;
+    let spv_path = result.module.unwrap_single();
+    let spv_bytes = std::fs::read(spv_path)?;
+    Ok((spv_bytes, start.elapsed()))
+}
+
 /// Extract kernel execution time from profiling events.
 fn profiling_duration(event: &Event) -> Option<Duration> {
     let start = event.profiling_command_start().ok()?;
@@ -259,6 +270,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{src}: {out}");
         }
     }
+
+    // 9. Test OpenCL printf.
+    println!("\n═══ printf test ═══");
+    let printf_kernel = Kernel::create(&program, "printf_test")?;
+    let printf_data: Vec<u32> = vec![10, 20, 30, 40];
+    let printf_buf = ocl.upload(&printf_data)?;
+    println!(
+        "Running printf_test with {} work items...",
+        printf_data.len()
+    );
+    println!("--- device output ---");
+    ocl.run(&printf_kernel, printf_buf.len(), &[&printf_buf])?;
+    println!("--- end device output ---");
+
+    // 10. Test float printf.
+    println!("\n═══ printf float test ═══");
+    let float_kernel = Kernel::create(&program, "printf_float_test")?;
+    println!("--- device output ---");
+    ocl.run(&float_kernel, 1, &[])?;
+    println!("--- end device output ---");
+
+    // 11. Test fp64 printf (separate kernel crate with Float64 capability).
+    println!("\n═══ printf fp64 test ═══");
+    let fp64_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-fp64-shader");
+    let (fp64_spv, fp64_time) = compile_kernel_fp64(&fp64_crate)?;
+    println!(
+        "Compiled fp64 kernel ({} bytes, {fp64_time:?})",
+        fp64_spv.len()
+    );
+    let fp64_program = ocl.build_program(&fp64_spv)?;
+    let fp64_kernel = Kernel::create(&fp64_program, "printf_fp64_test")?;
+
+    let floats: Vec<f32> = vec![1.234, 5.678, 9.012, 0.345];
+    let doubles: Vec<f64> = vec![1.5, 2.25, 4.125, 8.0625];
+    let float_buf = ocl.upload(&floats)?;
+    let double_buf = ocl.upload(&doubles)?;
+    println!("--- device output ---");
+    ocl.run(&fp64_kernel, floats.len(), &[&float_buf, &double_buf])?;
+    println!("--- end device output ---");
 
     Ok(())
 }
