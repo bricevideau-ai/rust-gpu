@@ -1,0 +1,38 @@
+; SPIR-V
+; Version: 1.0
+; Generator: rspirv
+; Bound: 22
+OpCapability Addresses
+OpCapability Kernel
+OpCapability Vector16
+OpCapability Float16Buffer
+OpCapability Int8
+%1 = OpExtInstImport "OpenCL.std"
+OpMemoryModel Physical64 OpenCL
+OpEntryPoint Kernel %2 "main"
+%3 = OpString "$DIR/kernel_printf_call.rs"
+%5 = OpTypeVoid
+%6 = OpTypeFunction %5
+%7 = OpTypeInt 32 0
+%8 = OpTypeInt 8 0
+%9 = OpConstant  %7  4
+%10 = OpTypeArray %8 %9
+%11 = OpTypePointer UniformConstant %10
+%12 = OpConstant  %8  104
+%13 = OpConstant  %8  105
+%14 = OpConstant  %8  10
+%15 = OpConstant  %8  0
+%16 = OpConstantComposite  %10  %12 %13 %14 %15
+%17 = OpVariable  %11  UniformConstant %16
+%2 = OpFunction  %5  None %6
+%18 = OpLabel
+%19 = OpFunctionCall  %5  %4
+OpNoLine
+OpReturn
+OpFunctionEnd
+%4 = OpFunction  %5  None %6
+%20 = OpLabel
+%21 = OpExtInst  %7  %1 printf %17
+OpNoLine
+OpReturn
+OpFunctionEnd

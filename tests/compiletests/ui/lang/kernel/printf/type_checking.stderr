@@ -1,0 +1,159 @@
+error: Unrecognised format specifier: 'r'
+  --> $DIR/type_checking.rs:32:24
+   |
+LL |     spirv_std::printf!("%r", value);
+   |                        ^^^^
+
+error: v8 vectors are not yet supported (only v2, v3, v4)
+  --> $DIR/type_checking.rs:47:24
+   |
+LL |     spirv_std::printf!("%v8hlu", value);
+   |                        ^^^^^^^^
+
+error: v16 vectors are not yet supported (only v2, v3, v4)
+  --> $DIR/type_checking.rs:52:24
+   |
+LL |     spirv_std::printf!("%v16hld", value);
+   |                        ^^^^^^^^^
+
+error: 'hl' length modifier is only valid with a vector specifier
+  --> $DIR/type_checking.rs:57:24
+   |
+LL |     spirv_std::printf!("%hld", value);
+   |                        ^^^^^^
+
+error: Length modifier 'hh' is not valid with float conversion 'f'
+  --> $DIR/type_checking.rs:62:24
+   |
+LL |     spirv_std::printf!("%hhf", value);
+   |                        ^^^^^^
+
+error[E0308]: mismatched types
+  --> $DIR/type_checking.rs:17:32
+   |
+LL |     spirv_std::printf!("%hhd", value);
+   |     ---------------------------^^^^^-
+   |     |                          |
+   |     |                          expected `i8`, found `u32`
+   |     arguments to this function are incorrect
+   |
+help: the return type of this call is `u32` due to the type of the argument passed
+  --> $DIR/type_checking.rs:17:5
+   |
+LL |     spirv_std::printf!("%hhd", value);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^-----^
+   |                                |
+   |                                this argument influences the return type of `assert_is_type`
+note: function defined here
+  --> $SPIRV_STD_SRC/debug_printf.rs:6:7
+   = note: this error originates in the macro `spirv_std::printf` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: you can convert a `u32` to an `i8` and panic if the converted value doesn't fit
+   |
+LL |     spirv_std::printf!("%hhd", value.try_into().unwrap());
+   |                                     ++++++++++++++++++++
+
+error[E0308]: mismatched types
+  --> $DIR/type_checking.rs:22:31
+   |
+LL |     spirv_std::printf!("%hu", value);
+   |     --------------------------^^^^^-
+   |     |                         |
+   |     |                         expected `u16`, found `i32`
+   |     arguments to this function are incorrect
+   |
+help: the return type of this call is `i32` due to the type of the argument passed
+  --> $DIR/type_checking.rs:22:5
+   |
+LL |     spirv_std::printf!("%hu", value);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^-----^
+   |                               |
+   |                               this argument influences the return type of `assert_is_type`
+note: function defined here
+  --> $SPIRV_STD_SRC/debug_printf.rs:6:7
+   = note: this error originates in the macro `spirv_std::printf` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: you can convert an `i32` to a `u16` and panic if the converted value doesn't fit
+   |
+LL |     spirv_std::printf!("%hu", value.try_into().unwrap());
+   |                                    ++++++++++++++++++++
+
+error[E0308]: mismatched types
+  --> $DIR/type_checking.rs:27:31
+   |
+LL |     spirv_std::printf!("%ld", value);
+   |     --------------------------^^^^^-
+   |     |                         |
+   |     |                         expected `i64`, found `u32`
+   |     arguments to this function are incorrect
+   |
+help: the return type of this call is `u32` due to the type of the argument passed
+  --> $DIR/type_checking.rs:27:5
+   |
+LL |     spirv_std::printf!("%ld", value);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^-----^
+   |                               |
+   |                               this argument influences the return type of `assert_is_type`
+note: function defined here
+  --> $SPIRV_STD_SRC/debug_printf.rs:6:7
+   = note: this error originates in the macro `spirv_std::printf` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: you can convert a `u32` to an `i64`
+   |
+LL |     spirv_std::printf!("%ld", value.into());
+   |                                    +++++++
+
+error[E0277]: the trait bound `u32: spirv_std::debug_printf::PrintfFloat` is not satisfied
+  --> $DIR/type_checking.rs:37:30
+   |
+LL |     spirv_std::printf!("%f", value);
+   |     -------------------------^^^^^-
+   |     |                        |
+   |     |                        the trait `spirv_std::debug_printf::PrintfFloat` is not implemented for `u32`
+   |     required by a bound introduced by this call
+   |
+help: the following other types implement trait `spirv_std::debug_printf::PrintfFloat`
+  --> $SPIRV_STD_SRC/debug_printf.rs:19:0
+   |
+   = note: `f32`
+  ::: $SPIRV_STD_SRC/debug_printf.rs:20:0
+   |
+   = note: `f64`
+note: required by a bound in `spirv_std::debug_printf::assert_is_float`
+  --> $SPIRV_STD_SRC/debug_printf.rs:23:0
+
+error[E0277]: the trait bound `f32: spirv_std::Vector<f32, 2>` is not satisfied
+  --> $DIR/type_checking.rs:42:5
+   |
+LL |     spirv_std::printf!("%v2f", value);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `spirv_std::Vector<f32, 2>` is not implemented for `f32`
+   |
+help: the trait `spirv_std::Vector<f32, 2>` is implemented for `Vec2`
+  --> $SPIRV_STD_SRC/vector.rs:71:12
+  ::: $SPIRV_STD_SRC/vector.rs:93:1
+   |
+   = note: in this macro invocation
+note: required by a bound in `spirv_std::debug_printf::assert_is_vector`
+  --> $SPIRV_STD_SRC/debug_printf.rs:11:0
+   = note: this error originates in the macro `spirv_std::printf` which comes from the expansion of the macro `impl_vector` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `u32: spirv_std::debug_printf::PrintfPointer` is not satisfied
+  --> $DIR/type_checking.rs:67:30
+   |
+LL |     spirv_std::printf!("%p", value);
+   |     -------------------------^^^^^-
+   |     |                        |
+   |     |                        the trait `spirv_std::debug_printf::PrintfPointer` is not implemented for `u32`
+   |     required by a bound introduced by this call
+   |
+help: the following other types implement trait `spirv_std::debug_printf::PrintfPointer`
+  --> $SPIRV_STD_SRC/debug_printf.rs:30:0
+   |
+   = note: `*const T`
+  ::: $SPIRV_STD_SRC/debug_printf.rs:31:0
+   |
+   = note: `*mut T`
+note: required by a bound in `spirv_std::debug_printf::assert_is_pointer`
+  --> $SPIRV_STD_SRC/debug_printf.rs:34:0
+
+error: aborting due to 11 previous errors
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.

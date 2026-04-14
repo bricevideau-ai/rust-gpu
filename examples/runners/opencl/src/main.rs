@@ -211,6 +211,17 @@ fn compile_kernel_with_arg_info(
     Ok((spv_bytes, start.elapsed()))
 }
 
+/// Compile a kernel crate with `Float64` capability.
+fn compile_kernel_fp64(path: &Path) -> Result<(Vec<u8>, Duration), Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    let result: CompileResult = SpirvBuilder::new(path, "spirv-unknown-opencl1.2")
+        .capability(Capability::Float64)
+        .build()?;
+    let spv_path = result.module.unwrap_single();
+    let spv_bytes = std::fs::read(spv_path)?;
+    Ok((spv_bytes, start.elapsed()))
+}
+
 /// Compile a kernel crate with `Groups` capability (`OpenCL` 2.0 for subgroup ops).
 fn compile_kernel_groups(path: &Path) -> Result<(Vec<u8>, Duration), Box<dyn std::error::Error>> {
     let start = Instant::now();
@@ -380,14 +391,62 @@ fn run_arg_info_test(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+fn run_printf(ocl: &OclContext, program: &Program) -> Result<(), Box<dyn std::error::Error>> {
+    let printf_kernel = Kernel::create(program, "printf_test")?;
+    let printf_data: Vec<u32> = vec![10, 20, 30, 40];
+    let printf_buf = ocl.upload(&printf_data)?;
+    println!(
+        "Running printf_test with {} work items...",
+        printf_data.len()
+    );
+    println!("--- device output ---");
+    ocl.run(&printf_kernel, printf_buf.len(), &[&printf_buf])?;
+    println!("--- end device output ---");
+    Ok(())
+}
+
+fn run_printf_float(ocl: &OclContext, program: &Program) -> Result<(), Box<dyn std::error::Error>> {
+    let float_kernel = Kernel::create(program, "printf_float_test")?;
+    println!("--- device output ---");
+    ocl.run(&float_kernel, 1, &[])?;
+    println!("--- end device output ---");
+    Ok(())
+}
+
+fn run_printf_fp64(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::new(ocl.device_id);
+    let has_fp64 = device.double_fp_config().unwrap_or(0) != 0;
+    if !has_fp64 {
+        println!("Skipped: device does not support fp64");
+        return Ok(());
+    }
+
+    let fp64_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-fp64-shader");
+    let (fp64_spv, fp64_time) = compile_kernel_fp64(&fp64_crate)?;
+    println!(
+        "Compiled fp64 kernel ({} bytes, {fp64_time:?})",
+        fp64_spv.len()
+    );
+    let fp64_program = ocl.build_program(&fp64_spv)?;
+    let fp64_kernel = Kernel::create(&fp64_program, "printf_fp64_test")?;
+
+    let floats: Vec<f32> = vec![1.234, 5.678, 9.012, 0.345];
+    let doubles: Vec<f64> = vec![1.5, 2.25, 4.125, 8.0625];
+    let float_buf = ocl.upload(&floats)?;
+    let double_buf = ocl.upload(&doubles)?;
+    println!("--- device output ---");
+    ocl.run(&fp64_kernel, floats.len(), &[&float_buf, &double_buf])?;
+    println!("--- end device output ---");
+    Ok(())
+}
+
 /// Probe the actual sub-group execution width a built kernel will use
 /// for a given local work size, via `clGetKernelSubGroupInfo`
 /// (CL 2.1+) with `CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE`. Use this
-/// to predict whether sub-group reduction / scan / shuffle ops will do
-/// useful work or degenerate to per-lane no-ops on this device
-/// (the latter happens e.g. on rusticl over llvmpipe, which executes
-/// every work-item as its own SIMD lane regardless of what the
-/// device extension list advertises).
+/// to derive the expected values for sub-group-scoped reduction /
+/// scan tests instead of assuming `sg_size == WG` — the latter
+/// happens on pocl-cpu but not e.g. rusticl-over-llvmpipe, which
+/// runs the same kernel with SG=4.
 fn subgroup_size_for_kernel(
     ocl: &OclContext,
     program: &Program,
@@ -836,7 +895,7 @@ fn section(name: &str, f: impl FnOnce() -> Result<(), Box<dyn std::error::Error>
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Compile kernel-shader crate.
+    // Compile kernel-shader crate (shared by collatz and printf).
     let kernel_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-shader");
     let (spv_bytes, compile_time) = compile_kernel(&kernel_crate)?;
     println!(
@@ -864,6 +923,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         errors += 1;
     }
     if !section("Kernel arg info reflection", || run_arg_info_test(&ocl)) {
+        errors += 1;
+    }
+    if !section("printf test", || run_printf(&ocl, &program)) {
+        errors += 1;
+    }
+    if !section("printf float test", || run_printf_float(&ocl, &program)) {
+        errors += 1;
+    }
+    if !section("printf fp64 test", || run_printf_fp64(&ocl)) {
         errors += 1;
     }
     if !section("Subgroup & shared memory tests", || {
