@@ -89,6 +89,7 @@ pub extern crate spirv_std_macros as macros;
 pub use macros::ScalarComposite;
 pub use macros::spirv;
 pub use macros::{debug_printf, debug_printfln};
+pub use macros::{printf, printfln};
 
 pub mod arch;
 pub mod byte_addressable_buffer;

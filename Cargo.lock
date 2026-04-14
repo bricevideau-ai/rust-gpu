@@ -2000,6 +2000,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-fp64-shader"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
 name = "kernel-shader"
 version = "0.0.0"
 dependencies = [
