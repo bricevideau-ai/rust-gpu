@@ -1,4 +1,5 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
+#![cfg_attr(target_arch = "spirv", feature(asm_experimental_arch))]
 // HACK(eddyb) can't easily see warnings otherwise from `spirv-builder` builds.
 #![deny(warnings)]
 
@@ -70,4 +71,21 @@ pub fn arg_ordering_test(
         data[0] = scalar_a;
         data[1] = scalar_b;
     }
+}
+
+/// Simple kernel that prints each work item's ID and input value using `OpenCL` `printf`.
+#[spirv(kernel)]
+pub fn printf_test(
+    #[spirv(global_invocation_id)] id: USizeVec3,
+    #[spirv(cross_workgroup)] data: &[u32],
+) {
+    let index = id.x;
+    spirv_std::printf!("work item %u: value = %u\n", index as u32, data[index]);
+}
+
+/// Test float printf (float → double promotion for `OpenCL` printf).
+#[spirv(kernel)]
+pub fn printf_float_test() {
+    let val: f32 = 1.234;
+    spirv_std::printf!("float: %f\n", val);
 }

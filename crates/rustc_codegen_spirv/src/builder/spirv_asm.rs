@@ -404,15 +404,15 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
             .def(self.span(), self),
             Op::TypePointer => {
                 let storage_class = inst.operands[0].unwrap_storage_class();
-                if storage_class != StorageClass::Generic {
-                    self.struct_err("TypePointer in asm! requires `Generic` storage class")
-                        .with_note(format!(
-                            "`{storage_class:?}` storage class was specified"
-                        ))
-                        .with_help(format!(
-                            "the storage class will be inferred automatically (e.g. to `{storage_class:?}`)"
-                        ))
-                        .emit();
+                if storage_class != StorageClass::Generic
+                    && storage_class != StorageClass::UniformConstant
+                {
+                    self.struct_err(
+                        "TypePointer in asm! requires `Generic` or `UniformConstant` storage class",
+                    )
+                    .with_note(format!("`{storage_class:?}` storage class was specified"))
+                    .with_help("the storage class will be inferred automatically")
+                    .emit();
                 }
                 SpirvType::Pointer {
                     pointee: inst.operands[1].unwrap_id_ref(),
