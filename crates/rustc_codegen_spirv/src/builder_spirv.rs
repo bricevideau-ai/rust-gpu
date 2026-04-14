@@ -502,6 +502,8 @@ impl<'tcx> BuilderSpirv<'tcx> {
             );
             // Physical64 addressing requires 64-bit integers for pointer-sized values.
             add_cap(&mut builder, &mut enabled_capabilities, Capability::Int64);
+            // OpenCL has native 8-bit integer support (char/uchar types).
+            add_cap(&mut builder, &mut enabled_capabilities, Capability::Int8);
         } else {
             add_cap(&mut builder, &mut enabled_capabilities, Capability::Shader);
             if memory_model == MemoryModel::Vulkan {
