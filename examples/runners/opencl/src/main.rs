@@ -260,5 +260,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // 9. Test OpenCL printf.
+    println!("\n═══ printf test ═══");
+    let printf_kernel = Kernel::create(&program, "printf_test")?;
+    let printf_data: Vec<u32> = vec![10, 20, 30, 40];
+    let printf_buf = ocl.upload(&printf_data)?;
+    println!(
+        "Running printf_test with {} work items...",
+        printf_data.len()
+    );
+    println!("--- device output ---");
+    ocl.run(&printf_kernel, printf_buf.len(), &[&printf_buf])?;
+    println!("--- end device output ---");
+
     Ok(())
 }
