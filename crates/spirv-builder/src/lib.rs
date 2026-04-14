@@ -945,6 +945,9 @@ fn invoke_rustc(builder: &SpirvBuilder) -> Result<PathBuf, SpirvBuilderError> {
         "-Csymbol-mangling-version=v0".to_string(),
         "-Zcrate-attr=feature(register_tool)".to_string(),
         "-Zcrate-attr=register_tool(rust_gpu)".to_string(),
+        // Enable inline asm for SPIR-V — needed by spirv-std's arch functions
+        // and by printf!/debug_printf! macros that expand asm! into user crates.
+        "-Zcrate-attr=feature(asm_experimental_arch)".to_string(),
         // HACK(eddyb) this is the same configuration that we test with, and
         // ensures no unwanted surprises from e.g. `core` debug assertions.
         "-Coverflow-checks=off".to_string(),

@@ -1,5 +1,4 @@
 #![no_std]
-#![cfg_attr(target_arch = "spirv", feature(asm_experimental_arch))]
 
 use glam::Vec4;
 use spirv_std::arch::{vector_extract_dynamic, vector_insert_dynamic};

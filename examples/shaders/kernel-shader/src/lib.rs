@@ -1,5 +1,4 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
-#![cfg_attr(target_arch = "spirv", feature(asm_experimental_arch))]
 // HACK(eddyb) can't easily see warnings otherwise from `spirv-builder` builds.
 #![deny(warnings)]
 

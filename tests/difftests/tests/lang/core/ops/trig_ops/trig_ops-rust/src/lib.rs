@@ -1,5 +1,4 @@
 #![no_std]
-#![cfg_attr(target_arch = "spirv", feature(asm_experimental_arch))]
 
 #[allow(unused_imports)]
 use spirv_std::num_traits::Float;

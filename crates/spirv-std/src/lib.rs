@@ -2,7 +2,7 @@
 #![cfg_attr(
     target_arch = "spirv",
     allow(internal_features),
-    feature(asm_experimental_arch, lang_items)
+    feature(lang_items)
 )]
 // FIXME(eddyb) update/review these lints.
 //
