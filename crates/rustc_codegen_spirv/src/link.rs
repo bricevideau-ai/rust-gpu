@@ -329,13 +329,11 @@ fn do_spirv_opt(
     filename: &Path,
     options: spirv_tools::opt::Options,
 ) -> Vec<u32> {
-    use spirv_tools::{
-        error,
-        opt::{self, Optimizer},
-    };
+    use spirv_tools::opt::{self, Optimizer};
 
     let target = SpirvTarget::parse_env(sess.target.options.env.desc()).unwrap();
-    let mut optimizer = opt::create(Some(target.to_spirv_tools()));
+    let target_env = target.to_spirv_tools();
+    let mut optimizer = opt::create(Some(target_env));
 
     match sess.opts.optimize {
         OptLevel::No => {}
@@ -353,16 +351,43 @@ fn do_spirv_opt(
             .register_pass(opt::Passes::StripDebugInfo);
     }
 
+    // NOTE(Kerilk) spirv-opt can crash (SIGSEGV) on some valid SPIR-V,
+    // particularly with Kernel targets and certain dead branch patterns.
+    // When using compiled tools (in-process FFI), a crash would kill the
+    // entire compiler. Run performance/size passes in a forked child
+    // process to isolate crashes, then apply safe passes (DCE, strip
+    // debug) in-process on the result.
+    #[cfg(unix)]
+    if cfg!(feature = "use-compiled-tools") {
+        return do_spirv_opt_forked(
+            sess,
+            cg_args,
+            spv_binary,
+            filename,
+            options,
+            Some(target_env),
+            &optimizer,
+        );
+    }
+
+    do_spirv_opt_inner(sess, &optimizer, spv_binary, filename, options)
+}
+
+fn do_spirv_opt_inner(
+    sess: &Session,
+    optimizer: &impl spirv_tools::opt::Optimizer,
+    spv_binary: Vec<u32>,
+    filename: &Path,
+    options: spirv_tools::opt::Options,
+) -> Vec<u32> {
+    use spirv_tools::error;
+
     let result = optimizer.optimize(
         &spv_binary,
         &mut |msg: error::Message| {
             use error::MessageLevel as Level;
 
-            // TODO: Adds spans here? Not sure how useful with binary, but maybe?
-
             let mut err = match msg.level {
-                // We have to manually construct this after `forget_guarantee` was removed in
-                // <https://github.com/rust-lang/rust/commit/2cd14bc9394ca6675e08d02c02c5f9abfa813616>
                 Level::Error | Level::Fatal | Level::InternalError => {
                     Diag::<()>::new(sess.dcx(), rustc_errors::Level::Error, msg.message)
                 }
@@ -387,6 +412,260 @@ fn do_spirv_opt(
             spv_binary
         }
     }
+}
+
+/// Run spirv-opt with crash isolation for compiled tools.
+///
+/// Performance/size passes can crash (SIGSEGV / SIGABRT) inside
+/// spirv-tools on some valid SPIR-V (e.g., Kernel targets with certain
+/// dead-branch patterns, or operands that the bundled spirv-tools
+/// version mishandles — `matrix_ops-opencl` on aarch64 asserts in
+/// `Instruction::GetSingleWordOperand`). The full optimizer runs in
+/// a forked child process so the assertion or segfault doesn't kill
+/// the whole compiler.
+///
+/// On crash, we walk a three-step fallback ladder:
+///
+/// 1. **Shell out to the system `spirv-opt` CLI.** Several of the
+///    crashes we've seen in the bundled `spirv-tools` v0.13 are
+///    fixed in newer upstream releases. If the user has a recent
+///    `spirv-opt` on `PATH`, deferring to it costs us one extra
+///    process spawn + temp file but recovers full optimization
+///    quality. `matrix_ops-opencl` on aarch64 succeeds via this
+///    path with SPIRV-Tools v2026.1.
+///
+/// 2. **Safe-pass-only fallback in-process.** If no `spirv-opt`
+///    binary is available or it also fails, run an in-process subset
+///    of passes that excludes the known crashing one
+///    (`DeadBranchElim`) plus the cleanup passes. These haven't been
+///    observed to crash on the Kernel-mode patterns we hit.
+///
+/// 3. **Unoptimized passthrough.** If even the safe passes fail to
+///    return a binary, `do_spirv_opt_inner` keeps the input intact.
+#[cfg(unix)]
+fn do_spirv_opt_forked(
+    sess: &Session,
+    cg_args: &CodegenArgs,
+    spv_binary: Vec<u32>,
+    filename: &Path,
+    options: spirv_tools::opt::Options,
+    target_env: Option<spirv_tools::TargetEnv>,
+    optimizer: &impl spirv_tools::opt::Optimizer,
+) -> Vec<u32> {
+    use spirv_tools::opt::{self, Optimizer};
+
+    let tmp_out = filename.with_extension("spirv-opt-out.spv");
+
+    // Step 1: run the bundled optimizer in a forked child on the
+    // original binary. If it returns a valid output file, we're done.
+    if let Some(words) = try_optimize_in_fork(optimizer, &spv_binary, options, &tmp_out) {
+        return words;
+    }
+
+    // Bundled optimizer crashed. Try the system `spirv-opt` binary
+    // (often newer than what we bundle, and may have the fix).
+    sess.dcx().warn(
+        "bundled spirv-opt crashed; retrying with the system `spirv-opt` binary if available",
+    );
+    if let Some(words) =
+        try_optimize_via_system_cli(sess, &spv_binary, filename, target_env, cg_args)
+    {
+        return words;
+    }
+
+    // System CLI also failed (or not available). Fall back to a
+    // limited set of passes that exclude DeadBranchElim, the most
+    // common crash source for Kernel-mode patterns.
+    sess.dcx()
+        .warn("system spirv-opt unavailable or failed; falling back to safe passes");
+
+    let mut safe_opt = opt::create(target_env);
+    safe_opt
+        .register_pass(opt::Passes::InlineExhaustive)
+        .register_pass(opt::Passes::ConditionalConstantPropagation)
+        .register_pass(opt::Passes::AggressiveDCE)
+        .register_pass(opt::Passes::EliminateDeadFunctions)
+        .register_pass(opt::Passes::EliminateDeadMembers)
+        .register_pass(opt::Passes::EliminateDeadConstant)
+        .register_pass(opt::Passes::DeadVariableElimination)
+        .register_pass(opt::Passes::CFGCleanup)
+        .register_pass(opt::Passes::BlockMerge);
+    if sess.opts.debuginfo == DebugInfo::None && cg_args.spirv_metadata == SpirvMetadata::None {
+        safe_opt.register_pass(opt::Passes::StripDebugInfo);
+    }
+
+    do_spirv_opt_inner(sess, &safe_opt, spv_binary, filename, Default::default())
+}
+
+/// Run `optimizer` on `spv` in a forked child process; return the
+/// optimized binary if the child exited cleanly and wrote a readable
+/// output, `None` if it crashed / failed.
+#[cfg(unix)]
+fn try_optimize_in_fork(
+    optimizer: &impl spirv_tools::opt::Optimizer,
+    spv: &[u32],
+    options: spirv_tools::opt::Options,
+    tmp_out: &Path,
+) -> Option<Vec<u32>> {
+    let pid = unsafe { libc::fork() };
+    if pid == -1 {
+        return None;
+    }
+    if pid == 0 {
+        // Child.
+        let result = optimizer.optimize(
+            spv,
+            &mut |_msg: spirv_tools::error::Message| {},
+            Some(options),
+        );
+        match result {
+            Ok(binary) => {
+                let _ =
+                    std::fs::write(tmp_out, spirv_tools::binary::from_binary(binary.as_words()));
+                unsafe { libc::_exit(0) };
+            }
+            Err(_) => unsafe { libc::_exit(1) },
+        }
+    }
+    // Parent.
+    let mut status: libc::c_int = 0;
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+    let ok = libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
+    let bytes = std::fs::read(tmp_out).ok();
+    let _ = std::fs::remove_file(tmp_out);
+    if ok
+        && let Some(b) = bytes
+        && let Ok(words) = spirv_tools::binary::to_binary(b.as_slice())
+    {
+        Some(words.to_vec())
+    } else {
+        None
+    }
+}
+
+/// Try the system `spirv-opt` binary (looked up on `PATH`) as a
+/// last-resort optimizer. The bundled `spirv-tools-rs` 0.13 vendors
+/// an older snapshot of SPIRV-Tools; users who have a newer one
+/// installed (e.g. distro package or local build) can often
+/// optimize binaries that crash the bundled version. Returns
+/// `Some(words)` on success, `None` if the binary isn't found, the
+/// invocation failed, or the output couldn't be parsed.
+#[cfg(unix)]
+fn try_optimize_via_system_cli(
+    sess: &Session,
+    spv: &[u32],
+    filename: &Path,
+    target_env: Option<spirv_tools::TargetEnv>,
+    cg_args: &CodegenArgs,
+) -> Option<Vec<u32>> {
+    use std::process::{Command, Stdio};
+
+    let tmp_in = filename.with_extension("spirv-opt-cli-in.spv");
+    let tmp_out = filename.with_extension("spirv-opt-cli-out.spv");
+
+    // Write input as a byte stream the CLI can read.
+    let bytes: Vec<u8> = spv.iter().flat_map(|w| w.to_le_bytes()).collect();
+    if std::fs::write(&tmp_in, &bytes).is_err() {
+        return None;
+    }
+
+    // Match the in-process optimizer's pass selection. `-O` =
+    // performance, `-Os` = size, `--legalize-hlsl` not relevant here.
+    let opt_flag = match sess.opts.optimize {
+        OptLevel::No => {
+            // No perf/size passes registered. Just strip debug if
+            // requested; otherwise nothing to do (return None so
+            // the caller falls back to in-process cleanup).
+            if sess.opts.debuginfo == DebugInfo::None
+                && cg_args.spirv_metadata == SpirvMetadata::None
+            {
+                "--strip-debug"
+            } else {
+                let _ = std::fs::remove_file(&tmp_in);
+                return None;
+            }
+        }
+        OptLevel::Less | OptLevel::More | OptLevel::Aggressive => "-O",
+        OptLevel::Size | OptLevel::SizeMin => "-Os",
+    };
+
+    let mut cmd = Command::new("spirv-opt");
+    cmd.arg(opt_flag);
+    if sess.opts.debuginfo == DebugInfo::None
+        && cg_args.spirv_metadata == SpirvMetadata::None
+        && opt_flag != "--strip-debug"
+    {
+        cmd.arg("--strip-debug");
+    }
+    if let Some(env) = target_env
+        && let Some(env_str) = target_env_to_cli_str(env)
+    {
+        // spirv-opt parses `--target-env` with `=`-separator form
+        // only; the space-separated `--target-env <env>` is
+        // mis-parsed as "more than one input file".
+        cmd.arg(format!("--target-env={env_str}"));
+    }
+    cmd.arg(&tmp_in)
+        .arg("-o")
+        .arg(&tmp_out)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let status = cmd.status();
+    let out_bytes = std::fs::read(&tmp_out).ok();
+    let _ = std::fs::remove_file(&tmp_in);
+    let _ = std::fs::remove_file(&tmp_out);
+
+    let ok = matches!(status, Ok(s) if s.success());
+    if ok
+        && let Some(b) = out_bytes
+        && let Ok(words) = spirv_tools::binary::to_binary(b.as_slice())
+    {
+        Some(words.to_vec())
+    } else {
+        None
+    }
+}
+
+/// Translate a `spirv_tools::TargetEnv` to the `--target-env` string
+/// the `spirv-opt` CLI accepts. The Rust enum's `Display` impl
+/// produces variant names (`OpenCL_2_1`) which the CLI rejects;
+/// these are the dotted-version forms it expects.
+#[cfg(unix)]
+fn target_env_to_cli_str(env: spirv_tools::TargetEnv) -> Option<&'static str> {
+    use spirv_tools::TargetEnv as T;
+    Some(match env {
+        T::Universal_1_0 => "spv1.0",
+        T::Universal_1_1 => "spv1.1",
+        T::Universal_1_2 => "spv1.2",
+        T::Universal_1_3 => "spv1.3",
+        T::Universal_1_4 => "spv1.4",
+        T::Universal_1_5 => "spv1.5",
+        T::Universal_1_6 => "spv1.6",
+        T::Vulkan_1_0 => "vulkan1.0",
+        T::Vulkan_1_1 => "vulkan1.1",
+        T::Vulkan_1_1_Spirv_1_4 => "vulkan1.1spv1.4",
+        T::Vulkan_1_2 => "vulkan1.2",
+        T::Vulkan_1_3 => "vulkan1.3",
+        T::Vulkan_1_4 => "vulkan1.4",
+        T::OpenCL_1_2 => "opencl1.2",
+        T::OpenCL_2_0 => "opencl2.0",
+        T::OpenCL_2_1 => "opencl2.1",
+        T::OpenCL_2_2 => "opencl2.2",
+        T::OpenCLEmbedded_1_2 => "opencl1.2embedded",
+        T::OpenCLEmbedded_2_0 => "opencl2.0embedded",
+        T::OpenCLEmbedded_2_1 => "opencl2.1embedded",
+        T::OpenCLEmbedded_2_2 => "opencl2.2embedded",
+        T::OpenGL_4_0 => "opengl4.0",
+        T::OpenGL_4_1 => "opengl4.1",
+        T::OpenGL_4_2 => "opengl4.2",
+        T::OpenGL_4_3 => "opengl4.3",
+        T::OpenGL_4_5 => "opengl4.5",
+        // Deprecated WebGPU target has no `spirv-opt` CLI mapping —
+        // just let the CLI fall back to its default target-env.
+        T::WebGPU_0_DEPRECATED => return None,
+    })
 }
 
 fn do_spirv_val(
