@@ -49,6 +49,33 @@ impl SpirvTarget {
         self.env.spirv_version()
     }
 
+    pub fn target_env(&self) -> TargetEnv {
+        self.env
+    }
+
+    pub fn is_opencl(&self) -> bool {
+        self.memory_model() == MemoryModel::OpenCL
+    }
+
+    pub fn is_opencl_2_0_or_later(&self) -> bool {
+        matches!(
+            self.env,
+            TargetEnv::OpenCL_2_0
+                | TargetEnv::OpenCLEmbedded_2_0
+                | TargetEnv::OpenCL_2_1
+                | TargetEnv::OpenCLEmbedded_2_1
+                | TargetEnv::OpenCL_2_2
+                | TargetEnv::OpenCLEmbedded_2_2
+        )
+    }
+
+    pub fn is_opencl_2_2_or_later(&self) -> bool {
+        matches!(
+            self.env,
+            TargetEnv::OpenCL_2_2 | TargetEnv::OpenCLEmbedded_2_2
+        )
+    }
+
     fn init_target_opts(&self) -> TargetOptions {
         let mut o = TargetOptions::default();
         o.simd_types_indirect = false;

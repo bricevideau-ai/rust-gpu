@@ -450,6 +450,51 @@ pub struct BuilderSpirv<'tcx> {
     enabled_capabilities: FxHashSet<Capability>,
 }
 
+/// Validate that a capability is allowed by the `OpenCL` SPIR-V environment specification.
+/// Reference: <https://registry.khronos.org/OpenCL/specs/3.0-unified/html/OpenCL_Env.html>
+fn validate_opencl_capability(cap: Capability, target: &SpirvTarget, tcx: TyCtxt<'_>) {
+    let allowed = match cap {
+        // Allowed for any OpenCL target: mandatory capabilities, device-dependent
+        // floating-point, and image capabilities.
+        Capability::Addresses
+        | Capability::Float16Buffer
+        | Capability::Int8
+        | Capability::Int16
+        | Capability::Int64
+        | Capability::Kernel
+        | Capability::Linkage
+        | Capability::Vector16
+        | Capability::Float16
+        | Capability::Float64
+        | Capability::ImageBasic
+        | Capability::LiteralSampler
+        | Capability::Sampled1D
+        | Capability::Image1D
+        | Capability::SampledBuffer
+        | Capability::ImageBuffer => true,
+
+        // OpenCL 2.0+ capabilities (device-dependent).
+        Capability::DeviceEnqueue
+        | Capability::GenericPointer
+        | Capability::Groups
+        | Capability::Pipes
+        | Capability::ImageReadWrite => target.is_opencl_2_0_or_later(),
+
+        // OpenCL 2.2+ capabilities (SPIR-V 1.1+).
+        Capability::SubgroupDispatch | Capability::PipeStorage => target.is_opencl_2_2_or_later(),
+
+        // Everything else is not part of the OpenCL SPIR-V environment.
+        _ => false,
+    };
+
+    if !allowed {
+        let target_env = target.target_env();
+        tcx.dcx().err(format!(
+            "capability `{cap:?}` is not allowed by the `{target_env:?}` environment specification"
+        ));
+    }
+}
+
 impl<'tcx> BuilderSpirv<'tcx> {
     pub fn new(
         tcx: TyCtxt<'tcx>,
@@ -485,6 +530,9 @@ impl<'tcx> BuilderSpirv<'tcx> {
         for feature in features {
             match *feature {
                 TargetFeature::Capability(cap) => {
+                    if target.is_opencl() {
+                        validate_opencl_capability(cap, target, tcx);
+                    }
                     add_cap(&mut builder, &mut enabled_capabilities, cap);
                 }
                 TargetFeature::Extension(ext) => {
@@ -494,16 +542,28 @@ impl<'tcx> BuilderSpirv<'tcx> {
         }
 
         if memory_model == MemoryModel::OpenCL {
-            add_cap(&mut builder, &mut enabled_capabilities, Capability::Kernel);
+            // Mandatory capabilities per the OpenCL SPIR-V Environment Specification
+            // (Section 3: Required Capabilities). These must be supported by all
+            // OpenCL implementations and are always declared.
             add_cap(
                 &mut builder,
                 &mut enabled_capabilities,
                 Capability::Addresses,
             );
-            // Physical64 addressing requires 64-bit integers for pointer-sized values.
-            add_cap(&mut builder, &mut enabled_capabilities, Capability::Int64);
-            // OpenCL has native 8-bit integer support (char/uchar types).
+            add_cap(
+                &mut builder,
+                &mut enabled_capabilities,
+                Capability::Float16Buffer,
+            );
             add_cap(&mut builder, &mut enabled_capabilities, Capability::Int8);
+            add_cap(&mut builder, &mut enabled_capabilities, Capability::Int16);
+            add_cap(&mut builder, &mut enabled_capabilities, Capability::Int64);
+            add_cap(&mut builder, &mut enabled_capabilities, Capability::Kernel);
+            add_cap(
+                &mut builder,
+                &mut enabled_capabilities,
+                Capability::Vector16,
+            );
         } else {
             add_cap(&mut builder, &mut enabled_capabilities, Capability::Shader);
             if memory_model == MemoryModel::Vulkan {
