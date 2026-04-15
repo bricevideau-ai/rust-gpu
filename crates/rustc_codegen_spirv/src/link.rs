@@ -329,10 +329,7 @@ fn do_spirv_opt(
     filename: &Path,
     options: spirv_tools::opt::Options,
 ) -> Vec<u32> {
-    use spirv_tools::{
-        error,
-        opt::{self, Optimizer},
-    };
+    use spirv_tools::opt::{self, Optimizer};
 
     let target_env = TargetEnv::from_str(sess.target.options.env.desc()).ok();
     let mut optimizer = opt::create(target_env);
@@ -353,16 +350,37 @@ fn do_spirv_opt(
             .register_pass(opt::Passes::StripDebugInfo);
     }
 
+    // NOTE(Kerilk) spirv-opt can crash (SIGSEGV) on some valid SPIR-V,
+    // particularly with Kernel targets and certain dead branch patterns.
+    // When using compiled tools (in-process FFI), a crash would kill the
+    // entire compiler. Run performance/size passes in a forked child
+    // process to isolate crashes, then apply safe passes (DCE, strip
+    // debug) in-process on the result.
+    #[cfg(unix)]
+    if cfg!(feature = "use-compiled-tools") {
+        return do_spirv_opt_forked(
+            sess, cg_args, spv_binary, filename, options, target_env, &optimizer,
+        );
+    }
+
+    do_spirv_opt_inner(sess, &optimizer, spv_binary, filename, options)
+}
+
+fn do_spirv_opt_inner(
+    sess: &Session,
+    optimizer: &impl spirv_tools::opt::Optimizer,
+    spv_binary: Vec<u32>,
+    filename: &Path,
+    options: spirv_tools::opt::Options,
+) -> Vec<u32> {
+    use spirv_tools::error;
+
     let result = optimizer.optimize(
         &spv_binary,
         &mut |msg: error::Message| {
             use error::MessageLevel as Level;
 
-            // TODO: Adds spans here? Not sure how useful with binary, but maybe?
-
             let mut err = match msg.level {
-                // We have to manually construct this after `forget_guarantee` was removed in
-                // <https://github.com/rust-lang/rust/commit/2cd14bc9394ca6675e08d02c02c5f9abfa813616>
                 Level::Error | Level::Fatal | Level::InternalError => {
                     Diag::<()>::new(sess.dcx(), rustc_errors::Level::Error, msg.message)
                 }
@@ -387,6 +405,95 @@ fn do_spirv_opt(
             spv_binary
         }
     }
+}
+
+/// Run spirv-opt with crash isolation for compiled tools.
+///
+/// Performance/size passes can crash (SIGSEGV) in spirv-tools on some
+/// valid SPIR-V (e.g., Kernel targets with certain dead branch patterns).
+/// The full optimizer runs in a forked child process. If it crashes, we
+/// fall back to safe cleanup passes (DCE, strip debug) in-process —
+/// these don't crash and produce a small enough binary for consumers.
+#[cfg(unix)]
+fn do_spirv_opt_forked(
+    sess: &Session,
+    cg_args: &CodegenArgs,
+    spv_binary: Vec<u32>,
+    filename: &Path,
+    options: spirv_tools::opt::Options,
+    target_env: Option<spirv_tools::TargetEnv>,
+    optimizer: &impl spirv_tools::opt::Optimizer,
+) -> Vec<u32> {
+    use spirv_tools::opt::{self, Optimizer};
+
+    let tmp_out = filename.with_extension("spirv-opt-out.spv");
+
+    // Fork a child to run the full optimizer.
+    let pid = unsafe { libc::fork() };
+    if pid == -1 {
+        sess.dcx()
+            .warn("spirv-opt: fork() failed, running in-process");
+        return do_spirv_opt_inner(sess, optimizer, spv_binary, filename, options);
+    }
+
+    if pid == 0 {
+        // Child: run the full optimizer, write result, exit.
+        let result = optimizer.optimize(
+            &spv_binary,
+            &mut |_msg: spirv_tools::error::Message| {},
+            Some(options),
+        );
+        match result {
+            Ok(binary) => {
+                let _ = std::fs::write(
+                    &tmp_out,
+                    spirv_tools::binary::from_binary(binary.as_words()),
+                );
+                unsafe { libc::_exit(0) };
+            }
+            Err(_) => {
+                unsafe { libc::_exit(1) };
+            }
+        }
+    }
+
+    // Parent: wait for the child.
+    let mut status: libc::c_int = 0;
+    unsafe { libc::waitpid(pid, &mut status, 0) };
+
+    if libc::WIFEXITED(status)
+        && libc::WEXITSTATUS(status) == 0
+        && let Ok(bytes) = std::fs::read(&tmp_out)
+    {
+        let _ = std::fs::remove_file(&tmp_out);
+        if let Ok(words) = spirv_tools::binary::to_binary(bytes.as_slice()) {
+            return words.to_vec();
+        }
+    }
+
+    // Child crashed or failed — run safe cleanup passes in-process.
+    let _ = std::fs::remove_file(&tmp_out);
+    sess.dcx()
+        .warn("spirv-opt performance passes crashed, falling back to cleanup-only");
+
+    let mut safe_opt = opt::create(target_env);
+    // Register the key optimization passes individually, skipping
+    // DeadBranchElim which crashes on some Kernel SPIR-V patterns.
+    safe_opt
+        .register_pass(opt::Passes::InlineExhaustive)
+        .register_pass(opt::Passes::ConditionalConstantPropagation)
+        .register_pass(opt::Passes::AggressiveDCE)
+        .register_pass(opt::Passes::EliminateDeadFunctions)
+        .register_pass(opt::Passes::EliminateDeadMembers)
+        .register_pass(opt::Passes::EliminateDeadConstant)
+        .register_pass(opt::Passes::DeadVariableElimination)
+        .register_pass(opt::Passes::CFGCleanup)
+        .register_pass(opt::Passes::BlockMerge);
+    if sess.opts.debuginfo == DebugInfo::None && cg_args.spirv_metadata == SpirvMetadata::None {
+        safe_opt.register_pass(opt::Passes::StripDebugInfo);
+    }
+
+    do_spirv_opt_inner(sess, &safe_opt, spv_binary, filename, Default::default())
 }
 
 fn do_spirv_val(
