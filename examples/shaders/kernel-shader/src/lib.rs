@@ -89,3 +89,19 @@ pub fn printf_float_test() {
     let val: f32 = 1.234;
     spirv_std::printf!("float: %f\n", val);
 }
+
+/// Simple atomic reduction: each work item adds its input element to `output[0]`.
+#[spirv(kernel)]
+pub fn atomic_reduce(
+    #[spirv(global_invocation_id)] id: USizeVec3,
+    #[spirv(cross_workgroup)] input: &[u32],
+    #[spirv(cross_workgroup)] output: &mut [u32],
+) {
+    unsafe {
+        spirv_std::arch::atomic_i_add::<
+            _,
+            { spirv_std::memory::Scope::Device as u32 },
+            { spirv_std::memory::Semantics::NONE.bits() },
+        >(&mut output[0], input[id.x]);
+    }
+}

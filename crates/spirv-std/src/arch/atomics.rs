@@ -641,3 +641,63 @@ pub unsafe fn atomic_f_add<F: Float, const SCOPE: u32, const SEMANTICS: u32>(
         old
     }
 }
+
+/// Atomically set the flag value pointed to by `ptr` to the set state.
+///
+/// Returns the original value of the flag as a boolean (`true` if the flag
+/// was already set, `false` if it was clear).
+///
+/// Requires the `Kernel` capability (`OpenCL` targets only).
+///
+/// `ptr` must point to a 32-bit unsigned integer value used as the flag.
+#[spirv_std_macros::gpu_only]
+#[doc(alias = "OpAtomicFlagTestAndSet")]
+#[inline]
+pub unsafe fn atomic_flag_test_and_set<const SCOPE: u32, const SEMANTICS: u32>(
+    ptr: &mut u32,
+) -> bool {
+    unsafe {
+        let mut old = false;
+
+        asm! {
+            "%bool = OpTypeBool",
+            "%u32 = OpTypeInt 32 0",
+            "%scope = OpConstant %u32 {scope}",
+            "%semantics = OpConstant %u32 {semantics}",
+            "%old = OpAtomicFlagTestAndSet %bool {ptr} %scope %semantics",
+            "OpStore {old} %old",
+            scope = const SCOPE,
+            semantics = const SEMANTICS,
+            ptr = in(reg) ptr,
+            old = in(reg) &mut old
+        }
+
+        old
+    }
+}
+
+/// Atomically clear the flag value pointed to by `ptr` (set it to the
+/// clear state).
+///
+/// Requires the `Kernel` capability (`OpenCL` targets only).
+///
+/// `ptr` must point to a 32-bit unsigned integer value used as the flag.
+///
+/// Per the SPIR-V specification, `SEMANTICS` must not include `Acquire`
+/// or `AcquireRelease` memory semantics.
+#[spirv_std_macros::gpu_only]
+#[doc(alias = "OpAtomicFlagClear")]
+#[inline]
+pub unsafe fn atomic_flag_clear<const SCOPE: u32, const SEMANTICS: u32>(ptr: &mut u32) {
+    unsafe {
+        asm! {
+            "%u32 = OpTypeInt 32 0",
+            "%scope = OpConstant %u32 {scope}",
+            "%semantics = OpConstant %u32 {semantics}",
+            "OpAtomicFlagClear {ptr} %scope %semantics",
+            scope = const SCOPE,
+            semantics = const SEMANTICS,
+            ptr = in(reg) ptr,
+        }
+    }
+}
