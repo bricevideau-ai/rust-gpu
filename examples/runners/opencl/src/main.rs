@@ -391,6 +391,33 @@ fn run_arg_info_test(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+fn run_atomic_reduce(
+    ocl: &OclContext,
+    program: &Program,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reduce_kernel = Kernel::create(program, "atomic_reduce")?;
+    let n_reduce = 1024usize;
+    let input: Vec<u32> = (1..=n_reduce as u32).collect();
+    let input_buf = ocl.upload(&input)?;
+    let output_buf = ocl.upload(&[0u32])?;
+    let event = ocl.run(&reduce_kernel, input_buf.len(), &[&input_buf, &output_buf])?;
+    let mut result = [0u32];
+    ocl.download(&output_buf, &mut result)?;
+    let expected = n_reduce as u32 * (n_reduce as u32 + 1) / 2;
+    if let Some(duration) = profiling_duration(&event) {
+        println!("Kernel:  {duration:?}");
+    }
+    if result[0] == expected {
+        println!("Verify:  sum(1..={n_reduce}) = {} PASS", result[0]);
+    } else {
+        eprintln!(
+            "FAIL:    sum(1..={n_reduce}) = {}, expected {expected}",
+            result[0]
+        );
+    }
+    Ok(())
+}
+
 fn run_printf(ocl: &OclContext, program: &Program) -> Result<(), Box<dyn std::error::Error>> {
     let printf_kernel = Kernel::create(program, "printf_test")?;
     let printf_data: Vec<u32> = vec![10, 20, 30, 40];
@@ -895,7 +922,7 @@ fn section(name: &str, f: impl FnOnce() -> Result<(), Box<dyn std::error::Error>
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Compile kernel-shader crate (shared by collatz and printf).
+    // Compile kernel-shader crate (shared by collatz, atomic reduce, printf).
     let kernel_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-shader");
     let (spv_bytes, compile_time) = compile_kernel(&kernel_crate)?;
     println!(
@@ -923,6 +950,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         errors += 1;
     }
     if !section("Kernel arg info reflection", || run_arg_info_test(&ocl)) {
+        errors += 1;
+    }
+    if !section("Atomic reduction", || run_atomic_reduce(&ocl, &program)) {
         errors += 1;
     }
     if !section("printf test", || run_printf(&ocl, &program)) {
