@@ -213,25 +213,11 @@ fn profiling_duration(event: &Event) -> Option<Duration> {
     Some(Duration::from_nanos(end - start))
 }
 
-// ── Main ───────────────────────────────────────────────────────────────
+// ── Test sections ─────────────────────────────────────────────────────
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Compile kernel.
-    let kernel_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-shader");
-    let (spv_bytes, compile_time) = compile_kernel(&kernel_crate)?;
-    println!(
-        "Compiled kernel ({} bytes SPIR-V, {compile_time:?})",
-        spv_bytes.len()
-    );
+fn run_collatz(ocl: &OclContext, program: &Program) -> Result<(), Box<dyn std::error::Error>> {
+    let kernel = Kernel::create(program, "main_kernel")?;
 
-    // 2. Set up device.
-    let ocl = OclContext::new()?;
-
-    // 3. Build program and create kernel.
-    let program = ocl.build_program(&spv_bytes)?;
-    let kernel = Kernel::create(&program, "main_kernel")?;
-
-    // 4. Upload input data.
     let top = 2u32.pow(20);
     let src_range = 1..top;
     let mut data: Vec<u32> = src_range.clone().collect();
@@ -243,18 +229,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let buf = ocl.upload(&data)?;
-
-    // 5. Run kernel.
     let event = ocl.run(&kernel, buf.len(), &[&buf])?;
-
-    // 6. Download results.
     ocl.download(&buf, &mut data)?;
 
     if let Some(duration) = profiling_duration(&event) {
         println!("Kernel:  {duration:?}");
     }
 
-    // 7. Validate.
     let checks: &[(u32, u32)] = &[(1, 0), (2, 1), (3, 7), (27, 111)];
     let mut all_ok = true;
     for &(input, expected) in checks {
@@ -268,7 +249,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Verify:  all spot checks passed");
     }
 
-    // 8. Print record-holders.
     println!("\nCollatz record-holders (starting value: steps):");
     println!("1: 0");
     let mut max = 0;
@@ -282,9 +262,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 9. Test OpenCL printf.
-    println!("\n═══ printf test ═══");
-    let printf_kernel = Kernel::create(&program, "printf_test")?;
+    Ok(())
+}
+
+fn run_atomic_reduce(
+    ocl: &OclContext,
+    program: &Program,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reduce_kernel = Kernel::create(program, "atomic_reduce")?;
+    let n_reduce = 1024usize;
+    let input: Vec<u32> = (1..=n_reduce as u32).collect();
+    let input_buf = ocl.upload(&input)?;
+    let output_buf = ocl.upload(&[0u32])?;
+    let event = ocl.run(&reduce_kernel, input_buf.len(), &[&input_buf, &output_buf])?;
+    let mut result = [0u32];
+    ocl.download(&output_buf, &mut result)?;
+    let expected = n_reduce as u32 * (n_reduce as u32 + 1) / 2;
+    if let Some(duration) = profiling_duration(&event) {
+        println!("Kernel:  {duration:?}");
+    }
+    if result[0] == expected {
+        println!("Verify:  sum(1..={n_reduce}) = {} PASS", result[0]);
+    } else {
+        eprintln!(
+            "FAIL:    sum(1..={n_reduce}) = {}, expected {expected}",
+            result[0]
+        );
+    }
+    Ok(())
+}
+
+fn run_printf(ocl: &OclContext, program: &Program) -> Result<(), Box<dyn std::error::Error>> {
+    let printf_kernel = Kernel::create(program, "printf_test")?;
     let printf_data: Vec<u32> = vec![10, 20, 30, 40];
     let printf_buf = ocl.upload(&printf_data)?;
     println!(
@@ -294,16 +303,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- device output ---");
     ocl.run(&printf_kernel, printf_buf.len(), &[&printf_buf])?;
     println!("--- end device output ---");
+    Ok(())
+}
 
-    // 10. Test float printf.
-    println!("\n═══ printf float test ═══");
-    let float_kernel = Kernel::create(&program, "printf_float_test")?;
+fn run_printf_float(ocl: &OclContext, program: &Program) -> Result<(), Box<dyn std::error::Error>> {
+    let float_kernel = Kernel::create(program, "printf_float_test")?;
     println!("--- device output ---");
     ocl.run(&float_kernel, 1, &[])?;
     println!("--- end device output ---");
+    Ok(())
+}
 
-    // 11. Test fp64 printf (separate kernel crate with Float64 capability).
-    println!("\n═══ printf fp64 test ═══");
+fn run_printf_fp64(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::new(ocl.device_id);
+    let has_fp64 = device.double_fp_config().unwrap_or(0) != 0;
+    if !has_fp64 {
+        println!("Skipped: device does not support fp64");
+        return Ok(());
+    }
+
     let fp64_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-fp64-shader");
     let (fp64_spv, fp64_time) = compile_kernel_fp64(&fp64_crate)?;
     println!(
@@ -320,9 +338,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- device output ---");
     ocl.run(&fp64_kernel, floats.len(), &[&float_buf, &double_buf])?;
     println!("--- end device output ---");
+    Ok(())
+}
 
-    // 12. Subgroup/shared memory torture tests.
-    println!("\n═══ Subgroup & shared memory tests ═══");
+fn run_subgroup_tests(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>> {
     let test_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-test-shader");
     let (test_spv, test_time) = compile_kernel_groups(&test_crate)?;
     println!(
@@ -337,7 +356,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pass_count = 0u32;
     let mut fail_count = 0u32;
 
-    // Helper: run a test at multiple workgroup counts and validate.
     fn check(name: &str, result: &[u32], expected: &[u32], pass: &mut u32, fail: &mut u32) {
         let mut ok = true;
         for (i, (&got, &exp)) in result.iter().zip(expected.iter()).enumerate() {
@@ -355,7 +373,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             *fail += 1;
         }
-        let _ = name; // used by caller in print
+        let _ = name;
     }
 
     // Test 1: subgroup builtins (multi-workgroup)
@@ -432,14 +450,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut r = vec![0u32; N];
         ocl.download(&out, &mut r)?;
 
-        // Each item gets the sum of (lid+1) across its subgroup.
-        // With sg_size=32: sum(1..=32) = 528 for all items.
         print!("Test 3 (group_i_add reduce, {NUM_WG} WGs): ");
-        // Print per-workgroup first element for diagnostics.
         for wg in 0..NUM_WG {
             print!("wg{wg}={} ", r[wg * WG]);
         }
-        let expected = vec![528u32; N]; // assuming sg_size == WG
+        let expected = vec![528u32; N];
         check("test3", &r, &expected, &mut pass_count, &mut fail_count);
     }
 
@@ -451,7 +466,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut r = vec![0u32; N];
         ocl.download(&out, &mut r)?;
 
-        // Each workgroup should have the same scan pattern: 0, 1, 3, 6, 10, ...
         let mut expected = vec![0u32; N];
         for wg in 0..NUM_WG {
             let mut acc = 0u32;
@@ -475,7 +489,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut r = vec![0u32; N];
         ocl.download(&out, &mut r)?;
 
-        // With sg_size=32: subgroup_id=0 for all, so shared[0]=0, all read 0.
         let expected = vec![0u32; N];
         print!("Test 5 (shared + subgroup builtins, {NUM_WG} WGs): ");
         for wg in 0..NUM_WG {
@@ -492,7 +505,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut r = vec![0u32; N];
         ocl.download(&out, &mut r)?;
 
-        let expected = vec![528u32; N]; // sum(1..=32) stored in shared[0]
+        let expected = vec![528u32; N];
         print!("Test 6 (subgroup ops + shared, {NUM_WG} WGs): ");
         for wg in 0..NUM_WG {
             print!("wg{wg}={} ", r[wg * WG]);
@@ -508,7 +521,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut r = vec![0u32; N];
         ocl.download(&out, &mut r)?;
 
-        // With sg_size=32: one subgroup, total=528, shared[0]=528, all read 528.
         let expected = vec![528u32; N];
         print!("Test 7 (all combined, {NUM_WG} WGs): ");
         for wg in 0..NUM_WG {
@@ -518,6 +530,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\nTotal: {pass_count} passed, {fail_count} failed");
+    Ok(())
+}
+
+// ── Main ───────────────────────────────────────────────────────────────
+
+/// Run a named test section, catching and reporting any errors.
+/// Returns `true` on success, `false` on failure.
+fn section(name: &str, f: impl FnOnce() -> Result<(), Box<dyn std::error::Error>>) -> bool {
+    println!("\n═══ {name} ═══");
+    match f() {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            false
+        }
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Compile kernel-shader crate (shared by collatz, atomic reduce, printf).
+    let kernel_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-shader");
+    let (spv_bytes, compile_time) = compile_kernel(&kernel_crate)?;
+    println!(
+        "Compiled kernel ({} bytes SPIR-V, {compile_time:?})",
+        spv_bytes.len()
+    );
+
+    // Set up device.
+    let ocl = OclContext::new()?;
+
+    // Build program for kernel-shader.
+    let program = ocl.build_program(&spv_bytes)?;
+
+    let mut errors = 0u32;
+
+    // Each section runs independently — a failure in one does not prevent
+    // the others from running.
+
+    if !section("Collatz", || run_collatz(&ocl, &program)) {
+        errors += 1;
+    }
+    if !section("Atomic reduction", || run_atomic_reduce(&ocl, &program)) {
+        errors += 1;
+    }
+    if !section("printf test", || run_printf(&ocl, &program)) {
+        errors += 1;
+    }
+    if !section("printf float test", || run_printf_float(&ocl, &program)) {
+        errors += 1;
+    }
+    if !section("printf fp64 test", || run_printf_fp64(&ocl)) {
+        errors += 1;
+    }
+    if !section("Subgroup & shared memory tests", || {
+        run_subgroup_tests(&ocl)
+    }) {
+        errors += 1;
+    }
+
+    if errors > 0 {
+        eprintln!("\n{errors} section(s) failed");
+        std::process::exit(1);
+    }
 
     Ok(())
 }
