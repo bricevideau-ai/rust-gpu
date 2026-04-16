@@ -122,7 +122,6 @@ impl<'tcx> CodegenCx<'tcx> {
             );
         }
 
-        // let execution_model = entry.execution_model;
         let stub = self.shader_entry_stub(
             span,
             entry_instance,
@@ -213,6 +212,7 @@ impl<'tcx> CodegenCx<'tcx> {
     // FIXME(eddyb) document this by itself.
     fn entry_param_deduce_from_rust_ref_or_value(
         &self,
+        execution_model: ExecutionModel,
         ref_or_value_layout: TyAndLayout<'tcx>,
         hir_param: &hir::Param<'tcx>,
         attrs: &AggregatedSpirvAttributes,
@@ -324,19 +324,30 @@ impl<'tcx> CodegenCx<'tcx> {
 
             storage_class
         });
-        // If storage class was not deduced nor specified, compute the default (i.e. input/output)
+        // If storage class was not deduced nor specified, compute the default.
+        // For Kernel (OpenCL) entry points, references default to CrossWorkgroup
+        // (global memory). For shader entry points, the default is Input/Output.
         let storage_class = deduced_storage_class_from_ty
             .or(attr_storage_class)
-            .unwrap_or_else(|| match (is_ref, explicit_mutbl) {
-                (false, _) => StorageClass::Input,
-                (true, hir::Mutability::Mut) => StorageClass::Output,
-                (true, hir::Mutability::Not) => self.tcx.dcx().span_fatal(
-                    hir_param.ty_span,
-                    format!(
-                        "invalid entry param type `{}` (expected `{}` or `&mut {1}`)",
-                        ref_or_value_layout.ty, value_layout.ty
-                    ),
-                ),
+            .unwrap_or_else(|| {
+                if execution_model == ExecutionModel::Kernel {
+                    match (is_ref, explicit_mutbl) {
+                        (false, _) => StorageClass::Input,
+                        (true, _) => StorageClass::CrossWorkgroup,
+                    }
+                } else {
+                    match (is_ref, explicit_mutbl) {
+                        (false, _) => StorageClass::Input,
+                        (true, hir::Mutability::Mut) => StorageClass::Output,
+                        (true, hir::Mutability::Not) => self.tcx.dcx().span_fatal(
+                            hir_param.ty_span,
+                            format!(
+                                "invalid entry param type `{}` (expected `{}` or `&mut {1}`)",
+                                ref_or_value_layout.ty, value_layout.ty
+                            ),
+                        ),
+                    }
+                }
             });
 
         // Validate reference mutability against the *final* storage class.
@@ -445,7 +456,12 @@ impl<'tcx> CodegenCx<'tcx> {
             value_layout,
             storage_class,
             read_only,
-        } = self.entry_param_deduce_from_rust_ref_or_value(entry_arg_abi.layout, hir_param, &attrs);
+        } = self.entry_param_deduce_from_rust_ref_or_value(
+            execution_model,
+            entry_arg_abi.layout,
+            hir_param,
+            &attrs,
+        );
         let value_spirv_type = value_layout.spirv_type(hir_param.ty_span, self);
 
         let (var_id, spec_const_id) = match storage_class {
@@ -716,10 +732,13 @@ impl<'tcx> CodegenCx<'tcx> {
         // locations, but the "client API" Vulkan doesn't describe any use-case for them, or at least none I'm aware of.
         // A quick scour through the spec revealed that `VK_KHR_dynamic_rendering_local_read` may need this, and while
         // we don't support it yet (I assume), I'll just keep it here in case it becomes useful in the future.
-        let has_location = matches!(
-            storage_class,
-            Ok(StorageClass::Input | StorageClass::Output | StorageClass::UniformConstant)
-        );
+        // Location decorations require the Shader capability and are not valid
+        // for Kernel entry points. Skip them entirely for Kernel execution model.
+        let has_location = execution_model != ExecutionModel::Kernel
+            && matches!(
+                storage_class,
+                Ok(StorageClass::Input | StorageClass::Output | StorageClass::UniformConstant)
+            );
         let mut assign_location = |var_id: Result<Word, &str>, explicit: Option<u32>| {
             let storage_class = storage_class.unwrap();
             let location = decoration_locations
