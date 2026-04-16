@@ -1,0 +1,10 @@
+OpCapability Addresses
+OpCapability Kernel
+OpCapability Vector16
+OpCapability Float16Buffer
+OpMemoryModel Physical64 OpenCL
+OpEntryPoint Kernel %1 "main"
+%2 = OpString "$DIR/kernel_target_caps.rs"
+OpName %3 "kernel_target_caps::main"
+%4 = OpTypeVoid
+%5 = OpTypeFunction %4

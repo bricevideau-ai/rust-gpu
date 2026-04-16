@@ -68,11 +68,11 @@ const BUILTINS: &[(&str, BuiltIn)] = {
         ("local_invocation_id", LocalInvocationId),
         ("global_invocation_id", GlobalInvocationId),
         ("local_invocation_index", LocalInvocationIndex),
-        // ("work_dim", WorkDim), -- Kernel-only
-        // ("global_size", GlobalSize), -- Kernel-only
-        // ("enqueued_workgroup_size", EnqueuedWorkgroupSize), -- Kernel-only
-        // ("global_offset", GlobalOffset), -- Kernel-only
-        // ("global_linear_id", GlobalLinearId), -- Kernel-only
+        ("work_dim", WorkDim),
+        ("global_size", GlobalSize),
+        ("enqueued_workgroup_size", EnqueuedWorkgroupSize),
+        ("global_offset", GlobalOffset),
+        ("global_linear_id", GlobalLinearId),
         ("subgroup_size", SubgroupSize),
         // ("subgroup_max_size", SubgroupMaxSize), -- Kernel-only
         ("num_subgroups", NumSubgroups),
@@ -193,6 +193,7 @@ const EXECUTION_MODELS: &[(&str, ExecutionModel)] = {
         ("geometry", Geometry),
         ("fragment", Fragment),
         ("compute", GLCompute),
+        ("kernel", Kernel),
         ("task_nv", TaskNV),
         ("mesh_nv", MeshNV),
         ("task_ext", TaskEXT),
