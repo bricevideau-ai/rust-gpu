@@ -447,7 +447,7 @@ pub struct BuilderSpirv<'tcx> {
 
     debug_file_cache: RefCell<FxHashMap<DebugFileKey, DebugFileSpirv<'tcx>>>,
 
-    enabled_capabilities: FxHashSet<Capability>,
+    enabled_capabilities: RefCell<FxHashSet<Capability>>,
 }
 
 /// Validate that a capability is allowed by the `OpenCL` SPIR-V environment specification.
@@ -595,7 +595,7 @@ impl<'tcx> BuilderSpirv<'tcx> {
             const_to_id: Default::default(),
             id_to_const: Default::default(),
             debug_file_cache: Default::default(),
-            enabled_capabilities,
+            enabled_capabilities: RefCell::new(enabled_capabilities),
         }
     }
 
@@ -617,7 +617,13 @@ impl<'tcx> BuilderSpirv<'tcx> {
     }
 
     pub fn has_capability(&self, capability: Capability) -> bool {
-        self.enabled_capabilities.contains(&capability)
+        self.enabled_capabilities.borrow().contains(&capability)
+    }
+
+    pub fn require_capability(&self, capability: Capability) {
+        if self.enabled_capabilities.borrow_mut().insert(capability) {
+            self.builder.borrow_mut().capability(capability);
+        }
     }
 
     /// See comment on `BuilderCursor`

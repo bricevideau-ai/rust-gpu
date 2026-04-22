@@ -26,6 +26,7 @@ pub struct Symbols {
     pub binding: Symbol,
     pub location: Symbol,
     pub input_attachment_index: Symbol,
+    pub image_access: Symbol,
 
     pub spec_constant: Symbol,
     pub id: Symbol,
@@ -434,6 +435,7 @@ impl Symbols {
             binding: Symbol::intern("binding"),
             location: Symbol::intern("location"),
             input_attachment_index: Symbol::intern("input_attachment_index"),
+            image_access: Symbol::intern("image_access"),
 
             spec_constant: Symbol::intern("spec_constant"),
             id: Symbol::intern("id"),

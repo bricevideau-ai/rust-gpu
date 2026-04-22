@@ -9,7 +9,7 @@ use crate::spirv_type::SpirvType;
 use rspirv::dr;
 use rspirv::grammar::{LogicalOperand, OperandKind, OperandQuantifier, reflect};
 use rspirv::spirv::{
-    CooperativeMatrixOperands, FPFastMathMode, FragmentShadingRate, FunctionControl,
+    Capability, CooperativeMatrixOperands, FPFastMathMode, FragmentShadingRate, FunctionControl,
     GroupOperation, ImageOperands, KernelProfilingInfo, LoopControl, MemoryAccess, MemorySemantics,
     Op, RayFlags, SelectionControl, StorageClass, Word,
 };
@@ -427,6 +427,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 multisampled: inst.operands[4].unwrap_literal_bit32(),
                 sampled: inst.operands[5].unwrap_literal_bit32(),
                 image_format: inst.operands[6].unwrap_image_format(),
+                access_qualifier: inst.operands.get(7).map(|op| op.unwrap_access_qualifier()),
             }
             .def(self.span(), self),
             Op::TypeSampledImage => SpirvType::SampledImage {
@@ -451,6 +452,17 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     self.emit_global()
                         .insert_types_global_values(dr::InsertPoint::End, inst);
                 }
+                return;
+            }
+
+            // `OpConstantSampler` is a module-scope constant (like other
+            // `OpConstant*`s), and uses the `LiteralSampler` capability —
+            // emit to globals and auto-add the capability so users don't
+            // have to remember it on every kernel that uses `const_sampler!`.
+            Op::ConstantSampler => {
+                self.builder.require_capability(Capability::LiteralSampler);
+                self.emit_global()
+                    .insert_types_global_values(dr::InsertPoint::End, inst);
                 return;
             }
 
