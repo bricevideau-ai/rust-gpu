@@ -1,0 +1,2160 @@
+//! Math intrinsics from the `OpenCL.std` extended instruction set.
+//!
+//! All functions in this module emit `OpExtInst %opencl_std <op> ...`,
+//! where `%opencl_std` is the result of `OpExtInstImport "OpenCL.std"`.
+//! These instructions are valid only in `Kernel` SPIR-V (i.e. `OpenCL`
+//! targets); behaviour on Vulkan/Shader targets is undefined.
+//!
+//! For Vulkan/shader targets, use the equivalents in `crate::arch::*` or
+//! `crate::float`, which call the `GLSL.std.450` set instead.
+//!
+//! # Naming conventions
+//!
+//! Functions match the `OpenCL` C names from the SPIR-V `OpenCL.std`
+//! extended instruction set spec. Where signedness matters for integers,
+//! the `s_` and `u_` prefixes follow the `OpenCL.std` naming
+//! (`s_min`, `u_min`, `s_clamp`, `u_clamp`, …).
+//!
+//! All ops accept both scalar and `glam`-vector arguments; on a vector
+//! the underlying `OpExtInst` is applied componentwise. The bounds are:
+//!
+//! - Float ops: [`FloatOrFloatVector`] — `f32`, `f64`, `Vec2`, `Vec3`,
+//!   `Vec3A`, `Vec4`, `DVec2`, `DVec3`, `DVec4`
+//! - Signed integer ops (`s_*`): [`SignedIntegerOrSignedVector`] —
+//!   `i8`/`i16`/`i32`/`i64`, `IVec2`/`IVec3`/`IVec4`
+//! - Unsigned integer ops (`u_*`): [`UnsignedIntegerOrUnsignedVector`]
+//!   — `u8`/`u16`/`u32`/`u64`, `UVec2`/`UVec3`/`UVec4`
+//! - Sign-agnostic integer ops (`popcount`, `clz`, `ctz`):
+//!   [`IntegerOrIntegerVector`] — any of the above integer types
+//!
+//! # `native_*` ops
+//!
+//! `native_sqrt`, `native_sin`, `native_cos`, `native_exp`, `native_log`
+//! are implementation-defined-precision faster variants of the IEEE
+//! versions. ULP error is implementation-defined and typically larger
+//! than the corresponding non-`native_` op. Use them when you need speed
+//! and tolerate the precision loss; otherwise prefer the non-prefixed
+//! versions.
+//!
+//! # `mad` vs `fma`
+//!
+//! [`mad`] is allowed to use unconstrained intermediate precision (the
+//! GPU may fuse it differently than `fma` or evaluate it as separate
+//! `mul` then `add`). For IEEE-754-deterministic fused multiply-add,
+//! use [`fma`].
+//!
+//! # Required capability
+//!
+//! No extra capability beyond `Kernel`. The `OpExtInstImport` for
+//! `"OpenCL.std"` is emitted inline in each call; the linker's
+//! `remove_duplicate_ext_inst_imports` pass collapses them to a single
+//! module-level import.
+
+// Host arms below pass `|x| num_traits::Float::method(x)` to per-component
+// macros for readability and consistency across the entire op table — the
+// closure form is uniform whether the body is one method call or a small
+// expression. Allow the redundant-closure lint at module scope rather than
+// per-call to keep the table dense.
+#![allow(clippy::redundant_closure)]
+
+#[cfg(target_arch = "spirv")]
+use core::arch::asm;
+
+#[cfg(not(target_arch = "spirv"))]
+extern crate libm;
+
+use crate::{Float, Integer, ScalarOrVector, SignedInteger, UnsignedInteger};
+
+/// Per-component access for the host arms of the `OpenCL.std` intrinsics.
+///
+/// On `target_arch = "spirv"` the GPU paths emit `OpExtInst` / `OpDot` /
+/// etc. directly and never see individual components, so this trait does
+/// not exist on the SPIR-V side — every type that flows through
+/// [`FloatOrFloatVector`] must impl this *only* for the host build.
+///
+/// The trait is exposed as `pub` because it appears in the host-side bound
+/// of [`FloatOrFloatVector`], but it's not part of the user-facing surface:
+/// users write `ocl::dot(a, b)`, not `a.zip_componentwise(...)`.
+#[cfg(not(target_arch = "spirv"))]
+pub trait Componentwise: Copy {
+    /// The per-component scalar type. Named `Component` (not `Scalar`) to
+    /// avoid associated-type ambiguity when this trait travels with
+    /// [`ScalarOrVector`] (which already exposes its own `Scalar`).
+    type Component: Copy;
+    /// Apply `f` to each component independently and collect into a fresh
+    /// value of the same type.
+    fn map_componentwise(self, f: impl FnMut(Self::Component) -> Self::Component) -> Self;
+    /// Zip with another value of the same type, applying `f` componentwise.
+    fn zip_componentwise(
+        self,
+        other: Self,
+        f: impl FnMut(Self::Component, Self::Component) -> Self::Component,
+    ) -> Self;
+    /// Reduce: visit each component, threading an accumulator. Used for
+    /// reductions like `dot` / `length_squared`.
+    fn fold_componentwise<R: Copy>(self, init: R, f: impl FnMut(R, Self::Component) -> R) -> R;
+
+    /// Three-way zip — apply `f` to `(self_i, b_i, c_i)` componentwise
+    /// and collect into a fresh value. Default implementation walks `b`
+    /// and `c` once each via `fold_componentwise` to materialise their
+    /// components into stack arrays that the user closure can index.
+    /// Concrete impls don't need to override this unless they want a
+    /// faster path.
+    fn zip3_componentwise(
+        self,
+        b: Self,
+        c: Self,
+        mut f: impl FnMut(Self::Component, Self::Component, Self::Component) -> Self::Component,
+    ) -> Self {
+        // Use a `Cell`-backed cursor through `b` and `c` so the
+        // `map_componentwise(self, ...)` walker can pull one component
+        // from each of `b` and `c` per iteration without needing to
+        // materialise the full arrays through a const-N trait method.
+        use core::cell::RefCell;
+        let b_iter = RefCell::new(IterState::<Self::Component, Self>::new(b));
+        let c_iter = RefCell::new(IterState::<Self::Component, Self>::new(c));
+        self.map_componentwise(|a_i| {
+            let b_i = b_iter.borrow_mut().next();
+            let c_i = c_iter.borrow_mut().next();
+            f(a_i, b_i, c_i)
+        })
+    }
+}
+
+/// Tiny iterator-ish helper that walks the components of a `Componentwise`
+/// value lazily by repeatedly applying `fold_componentwise`. Used by the
+/// default `zip3_componentwise` impl to thread `b` and `c` cursors.
+#[cfg(not(target_arch = "spirv"))]
+struct IterState<C: Copy, V: Componentwise<Component = C>> {
+    src: V,
+    pos: usize,
+}
+
+#[cfg(not(target_arch = "spirv"))]
+impl<C: Copy, V: Componentwise<Component = C>> IterState<C, V> {
+    fn new(src: V) -> Self {
+        Self { src, pos: 0 }
+    }
+    /// Returns the `pos`-th component of `src` and advances the cursor.
+    /// Implemented via `fold_componentwise` so we don't need an explicit
+    /// `to_array`/`get` on the trait. O(N) per call (used at most N times).
+    fn next(&mut self) -> C {
+        let target = self.pos;
+        self.pos += 1;
+        let mut found: Option<C> = None;
+        let mut idx = 0usize;
+        self.src.fold_componentwise((), |(), x| {
+            if idx == target {
+                found = Some(x);
+            }
+            idx += 1;
+        });
+        found.expect("zip3_componentwise: index out of range")
+    }
+}
+
+#[cfg(not(target_arch = "spirv"))]
+mod componentwise_impls {
+    use super::Componentwise;
+    use crate::glam;
+
+    macro_rules! componentwise_scalar {
+        ($($t:ty),+ $(,)?) => {
+            $(
+                impl Componentwise for $t {
+                    type Component = $t;
+                    #[inline]
+                    fn map_componentwise(
+                        self,
+                        mut f: impl FnMut(Self::Component) -> Self::Component,
+                    ) -> Self {
+                        f(self)
+                    }
+                    #[inline]
+                    fn zip_componentwise(
+                        self,
+                        other: Self,
+                        mut f: impl FnMut(Self::Component, Self::Component) -> Self::Component,
+                    ) -> Self {
+                        f(self, other)
+                    }
+                    #[inline]
+                    fn fold_componentwise<R: Copy>(
+                        self,
+                        init: R,
+                        mut f: impl FnMut(R, Self::Component) -> R,
+                    ) -> R {
+                        f(init, self)
+                    }
+                }
+            )+
+        };
+    }
+    componentwise_scalar!(f32, f64, i8, i16, i32, i64, u8, u16, u32, u64);
+
+    /// Generates a `Componentwise` impl for a glam vector that has
+    /// inherent `to_array(self) -> [T; N]` and `from_array([T; N]) -> Self`.
+    macro_rules! componentwise_glam_vec {
+        ($vec:ty, $scalar:ty) => {
+            impl Componentwise for $vec {
+                type Component = $scalar;
+                #[inline]
+                fn map_componentwise(
+                    self,
+                    mut f: impl FnMut(Self::Component) -> Self::Component,
+                ) -> Self {
+                    let mut a = self.to_array();
+                    for x in &mut a {
+                        *x = f(*x);
+                    }
+                    Self::from_array(a)
+                }
+                #[inline]
+                fn zip_componentwise(
+                    self,
+                    other: Self,
+                    mut f: impl FnMut(Self::Component, Self::Component) -> Self::Component,
+                ) -> Self {
+                    let mut a = self.to_array();
+                    let b = other.to_array();
+                    for (x, y) in a.iter_mut().zip(b.iter()) {
+                        *x = f(*x, *y);
+                    }
+                    Self::from_array(a)
+                }
+                #[inline]
+                fn fold_componentwise<R: Copy>(
+                    self,
+                    init: R,
+                    mut f: impl FnMut(R, Self::Component) -> R,
+                ) -> R {
+                    let a = self.to_array();
+                    let mut acc = init;
+                    for x in a {
+                        acc = f(acc, x);
+                    }
+                    acc
+                }
+            }
+        };
+    }
+
+    componentwise_glam_vec!(glam::Vec2, f32);
+    componentwise_glam_vec!(glam::Vec3, f32);
+    componentwise_glam_vec!(glam::Vec3A, f32);
+    componentwise_glam_vec!(glam::Vec4, f32);
+    componentwise_glam_vec!(glam::DVec2, f64);
+    componentwise_glam_vec!(glam::DVec3, f64);
+    componentwise_glam_vec!(glam::DVec4, f64);
+    componentwise_glam_vec!(glam::IVec2, i32);
+    componentwise_glam_vec!(glam::IVec3, i32);
+    componentwise_glam_vec!(glam::IVec4, i32);
+    componentwise_glam_vec!(glam::UVec2, u32);
+    componentwise_glam_vec!(glam::UVec3, u32);
+    componentwise_glam_vec!(glam::UVec4, u32);
+}
+
+// On host, every type implementing this trait must also implement
+// `Componentwise` so the host arms of `dot`/`length`/etc. can iterate
+// per-component. On SPIR-V the supertrait is dropped — the GPU paths
+// emit `OpDot` etc. directly and never touch components individually.
+
+/// A float scalar (`f32`, `f64`) or a vector of floats (`glam::Vec2`,
+/// `glam::Vec3`, `glam::Vec3A`, `glam::Vec4`, `glam::DVec2`, `glam::DVec3`,
+/// `glam::DVec4`) — the argument type for `OpenCL.std` extended instructions
+/// that are polymorphic over `genFloat` in the `OpenCL` SPIR-V spec.
+///
+/// On vector arguments the underlying `OpExtInst` is applied componentwise,
+/// matching `OpenCL` C semantics.
+#[cfg(target_arch = "spirv")]
+pub trait FloatOrFloatVector: ScalarOrVector + Copy
+where
+    Self::Scalar: Float,
+{
+}
+
+/// A float scalar (`f32`, `f64`) or a vector of floats (`glam::Vec2`,
+/// `glam::Vec3`, `glam::Vec3A`, `glam::Vec4`, `glam::DVec2`, `glam::DVec3`,
+/// `glam::DVec4`) — the argument type for `OpenCL.std` extended instructions
+/// that are polymorphic over `genFloat` in the `OpenCL` SPIR-V spec.
+///
+/// On vector arguments the underlying `OpExtInst` is applied componentwise,
+/// matching `OpenCL` C semantics.
+#[cfg(not(target_arch = "spirv"))]
+pub trait FloatOrFloatVector:
+    ScalarOrVector + Copy + Componentwise<Component = <Self as ScalarOrVector>::Scalar>
+where
+    <Self as ScalarOrVector>::Scalar: Float,
+{
+}
+
+#[cfg(target_arch = "spirv")]
+impl<T> FloatOrFloatVector for T
+where
+    T: ScalarOrVector + Copy,
+    T::Scalar: Float,
+{
+}
+
+#[cfg(not(target_arch = "spirv"))]
+impl<T> FloatOrFloatVector for T
+where
+    T: ScalarOrVector + Copy + Componentwise<Component = <T as ScalarOrVector>::Scalar>,
+    <T as ScalarOrVector>::Scalar: Float,
+{
+}
+
+/// Any integer scalar or integer vector — argument type for `OpenCL.std`
+/// integer instructions polymorphic over `genIType`/`genUType` whose
+/// signedness doesn't matter (`popcount`, `clz`, `ctz`).
+#[cfg(target_arch = "spirv")]
+pub trait IntegerOrIntegerVector: ScalarOrVector + Copy
+where
+    Self::Scalar: Integer,
+{
+}
+
+/// Any integer scalar or integer vector — argument type for `OpenCL.std`
+/// integer instructions polymorphic over `genIType`/`genUType` whose
+/// signedness doesn't matter (`popcount`, `clz`, `ctz`).
+#[cfg(not(target_arch = "spirv"))]
+pub trait IntegerOrIntegerVector:
+    ScalarOrVector + Copy + Componentwise<Component = <Self as ScalarOrVector>::Scalar>
+where
+    <Self as ScalarOrVector>::Scalar: Integer,
+{
+}
+
+#[cfg(target_arch = "spirv")]
+impl<T> IntegerOrIntegerVector for T
+where
+    T: ScalarOrVector + Copy,
+    T::Scalar: Integer,
+{
+}
+
+#[cfg(not(target_arch = "spirv"))]
+impl<T> IntegerOrIntegerVector for T
+where
+    T: ScalarOrVector + Copy + Componentwise<Component = <T as ScalarOrVector>::Scalar>,
+    <T as ScalarOrVector>::Scalar: Integer,
+{
+}
+
+/// A signed-integer scalar (`i8`/`i16`/`i32`/`i64`) or a signed-integer
+/// vector (`glam::IVec2`/`IVec3`/`IVec4`) — argument type for `OpenCL.std`
+/// integer instructions polymorphic over `genIType` (the `s_` prefixed
+/// ops: `s_abs`, `s_min`, `s_max`, `s_clamp`).
+#[cfg(target_arch = "spirv")]
+pub trait SignedIntegerOrSignedVector: ScalarOrVector + Copy
+where
+    Self::Scalar: SignedInteger,
+{
+}
+
+/// A signed-integer scalar (`i8`/`i16`/`i32`/`i64`) or a signed-integer
+/// vector (`glam::IVec2`/`IVec3`/`IVec4`) — argument type for `OpenCL.std`
+/// integer instructions polymorphic over `genIType` (the `s_` prefixed
+/// ops: `s_abs`, `s_min`, `s_max`, `s_clamp`).
+#[cfg(not(target_arch = "spirv"))]
+pub trait SignedIntegerOrSignedVector:
+    ScalarOrVector + Copy + Componentwise<Component = <Self as ScalarOrVector>::Scalar>
+where
+    <Self as ScalarOrVector>::Scalar: SignedInteger,
+{
+}
+
+#[cfg(target_arch = "spirv")]
+impl<T> SignedIntegerOrSignedVector for T
+where
+    T: ScalarOrVector + Copy,
+    T::Scalar: SignedInteger,
+{
+}
+
+#[cfg(not(target_arch = "spirv"))]
+impl<T> SignedIntegerOrSignedVector for T
+where
+    T: ScalarOrVector + Copy + Componentwise<Component = <T as ScalarOrVector>::Scalar>,
+    <T as ScalarOrVector>::Scalar: SignedInteger,
+{
+}
+
+/// An unsigned-integer scalar (`u8`/`u16`/`u32`/`u64`) or an
+/// unsigned-integer vector (`glam::UVec2`/`UVec3`/`UVec4`) — argument
+/// type for `OpenCL.std` integer instructions polymorphic over
+/// `genUType` (the `u_` prefixed ops: `u_min`, `u_max`, `u_clamp`).
+#[cfg(target_arch = "spirv")]
+pub trait UnsignedIntegerOrUnsignedVector: ScalarOrVector + Copy
+where
+    Self::Scalar: UnsignedInteger,
+{
+}
+
+/// An unsigned-integer scalar (`u8`/`u16`/`u32`/`u64`) or an
+/// unsigned-integer vector (`glam::UVec2`/`UVec3`/`UVec4`) — argument
+/// type for `OpenCL.std` integer instructions polymorphic over
+/// `genUType` (the `u_` prefixed ops: `u_min`, `u_max`, `u_clamp`).
+#[cfg(not(target_arch = "spirv"))]
+pub trait UnsignedIntegerOrUnsignedVector:
+    ScalarOrVector + Copy + Componentwise<Component = <Self as ScalarOrVector>::Scalar>
+where
+    <Self as ScalarOrVector>::Scalar: UnsignedInteger,
+{
+}
+
+#[cfg(target_arch = "spirv")]
+impl<T> UnsignedIntegerOrUnsignedVector for T
+where
+    T: ScalarOrVector + Copy,
+    T::Scalar: UnsignedInteger,
+{
+}
+
+#[cfg(not(target_arch = "spirv"))]
+impl<T> UnsignedIntegerOrUnsignedVector for T
+where
+    T: ScalarOrVector + Copy + Componentwise<Component = <T as ScalarOrVector>::Scalar>,
+    <T as ScalarOrVector>::Scalar: UnsignedInteger,
+{
+}
+
+// ── libm dispatch trait ──────────────────────────────────────────────
+//
+// `num_traits::Float` doesn't expose erf/erfc/lgamma/tgamma/fdim/
+// nextafter/remainder/ilogb/ldexp/lgamma_r/remquo. The `libm` crate
+// provides them but with separate functions per precision (e.g.
+// `libm::erff` for `f32`, `libm::erf` for `f64`). This trait bridges
+// the gap so host arms can call them generically via `F::Scalar`.
+//
+// On SPIR-V the trait is empty (methods are never called — the inline
+// asm path is taken instead). Both `f32` and `f64` implement it on
+// both targets so it can appear in public function bounds.
+
+#[cfg(target_arch = "spirv")]
+#[allow(missing_docs)]
+pub trait LibmExt {}
+#[cfg(target_arch = "spirv")]
+impl LibmExt for f32 {}
+#[cfg(target_arch = "spirv")]
+impl LibmExt for f64 {}
+
+#[cfg(not(target_arch = "spirv"))]
+#[allow(missing_docs)]
+pub trait LibmExt: Float {
+    fn libm_erf(self) -> Self;
+    fn libm_erfc(self) -> Self;
+    fn libm_lgamma(self) -> Self;
+    fn libm_tgamma(self) -> Self;
+    fn libm_fdim(self, y: Self) -> Self;
+    fn libm_nextafter(self, y: Self) -> Self;
+    fn libm_remainder(self, y: Self) -> Self;
+    fn libm_ilogb(self) -> i32;
+    fn libm_ldexp(self, n: i32) -> Self;
+    fn libm_lgamma_r(self) -> (Self, i32);
+    fn libm_remquo(self, y: Self) -> (Self, i32);
+}
+
+#[cfg(not(target_arch = "spirv"))]
+impl LibmExt for f32 {
+    fn libm_erf(self) -> Self {
+        libm::erff(self)
+    }
+    fn libm_erfc(self) -> Self {
+        libm::erfcf(self)
+    }
+    fn libm_lgamma(self) -> Self {
+        libm::lgammaf(self)
+    }
+    fn libm_tgamma(self) -> Self {
+        libm::tgammaf(self)
+    }
+    fn libm_fdim(self, y: Self) -> Self {
+        libm::fdimf(self, y)
+    }
+    fn libm_nextafter(self, y: Self) -> Self {
+        libm::nextafterf(self, y)
+    }
+    fn libm_remainder(self, y: Self) -> Self {
+        libm::remainderf(self, y)
+    }
+    fn libm_ilogb(self) -> i32 {
+        libm::ilogbf(self)
+    }
+    fn libm_ldexp(self, n: i32) -> Self {
+        libm::ldexpf(self, n)
+    }
+    fn libm_lgamma_r(self) -> (Self, i32) {
+        libm::lgammaf_r(self)
+    }
+    fn libm_remquo(self, y: Self) -> (Self, i32) {
+        libm::remquof(self, y)
+    }
+}
+
+#[cfg(not(target_arch = "spirv"))]
+impl LibmExt for f64 {
+    fn libm_erf(self) -> Self {
+        libm::erf(self)
+    }
+    fn libm_erfc(self) -> Self {
+        libm::erfc(self)
+    }
+    fn libm_lgamma(self) -> Self {
+        libm::lgamma(self)
+    }
+    fn libm_tgamma(self) -> Self {
+        libm::tgamma(self)
+    }
+    fn libm_fdim(self, y: Self) -> Self {
+        libm::fdim(self, y)
+    }
+    fn libm_nextafter(self, y: Self) -> Self {
+        libm::nextafter(self, y)
+    }
+    fn libm_remainder(self, y: Self) -> Self {
+        libm::remainder(self, y)
+    }
+    fn libm_ilogb(self) -> i32 {
+        libm::ilogb(self)
+    }
+    fn libm_ldexp(self, n: i32) -> Self {
+        libm::ldexp(self, n)
+    }
+    fn libm_lgamma_r(self) -> (Self, i32) {
+        libm::lgamma_r(self)
+    }
+    fn libm_remquo(self, y: Self) -> (Self, i32) {
+        libm::remquo(self, y)
+    }
+}
+
+// ── SPIR-V inline asm helpers ────────────────────────────────────────
+
+#[cfg(target_arch = "spirv")]
+unsafe fn opencl_unary<T: Default + Copy, const OP: u32>(x: T) -> T {
+    let mut result = T::default();
+    unsafe {
+        asm! {
+            "%opencl = OpExtInstImport \"OpenCL.std\"",
+            "%x = OpLoad _ {x}",
+            "%result = OpExtInst typeof*{result} %opencl {op} %x",
+            "OpStore {result} %result",
+            x = in(reg) &x,
+            result = in(reg) &mut result,
+            op = const OP,
+        }
+    }
+    result
+}
+
+#[cfg(target_arch = "spirv")]
+unsafe fn opencl_binary<T: Default + Copy, const OP: u32>(a: T, b: T) -> T {
+    let mut result = T::default();
+    unsafe {
+        asm! {
+            "%opencl = OpExtInstImport \"OpenCL.std\"",
+            "%a = OpLoad _ {a}",
+            "%b = OpLoad _ {b}",
+            "%result = OpExtInst typeof*{result} %opencl {op} %a %b",
+            "OpStore {result} %result",
+            a = in(reg) &a,
+            b = in(reg) &b,
+            result = in(reg) &mut result,
+            op = const OP,
+        }
+    }
+    result
+}
+
+#[cfg(target_arch = "spirv")]
+unsafe fn opencl_ternary<T: Default + Copy, const OP: u32>(a: T, b: T, c: T) -> T {
+    let mut result = T::default();
+    unsafe {
+        asm! {
+            "%opencl = OpExtInstImport \"OpenCL.std\"",
+            "%a = OpLoad _ {a}",
+            "%b = OpLoad _ {b}",
+            "%c = OpLoad _ {c}",
+            "%result = OpExtInst typeof*{result} %opencl {op} %a %b %c",
+            "OpStore {result} %result",
+            a = in(reg) &a,
+            b = in(reg) &b,
+            c = in(reg) &c,
+            result = in(reg) &mut result,
+            op = const OP,
+        }
+    }
+    result
+}
+
+/// Same as `opencl_unary` but returns the per-component scalar type
+/// (used by `length` / `fast_length`, where `length(Vec3) -> f32`).
+#[cfg(target_arch = "spirv")]
+unsafe fn opencl_unary_to_scalar<V: ScalarOrVector + Copy, const OP: u32>(x: V) -> V::Scalar
+where
+    V::Scalar: Default + Copy,
+{
+    let mut result = V::Scalar::default();
+    unsafe {
+        asm! {
+            "%opencl = OpExtInstImport \"OpenCL.std\"",
+            "%x = OpLoad _ {x}",
+            "%result = OpExtInst typeof*{result} %opencl {op} %x",
+            "OpStore {result} %result",
+            x = in(reg) &x,
+            result = in(reg) &mut result,
+            op = const OP,
+        }
+    }
+    result
+}
+
+/// Same as `opencl_binary` but returns the per-component scalar type
+/// (used by `distance` / `fast_distance`).
+#[cfg(target_arch = "spirv")]
+unsafe fn opencl_binary_to_scalar<V: ScalarOrVector + Copy, const OP: u32>(a: V, b: V) -> V::Scalar
+where
+    V::Scalar: Default + Copy,
+{
+    let mut result = V::Scalar::default();
+    unsafe {
+        asm! {
+            "%opencl = OpExtInstImport \"OpenCL.std\"",
+            "%a = OpLoad _ {a}",
+            "%b = OpLoad _ {b}",
+            "%result = OpExtInst typeof*{result} %opencl {op} %a %b",
+            "OpStore {result} %result",
+            a = in(reg) &a,
+            b = in(reg) &b,
+            result = in(reg) &mut result,
+            op = const OP,
+        }
+    }
+    result
+}
+
+/// Helper for `OpenCL.std` ops that produce two outputs: a return value
+/// (`F`) and a value (`P`) written through a Function-storage pointer.
+/// Used by `fract`, `modf`, `frexp`, `sincos`. Returns both as a tuple.
+///
+/// The out-pointer's backing slot is allocated internally so callers
+/// see a clean `(F, P)` Rust API instead of having to thread an `&mut`
+/// argument through.
+#[cfg(target_arch = "spirv")]
+unsafe fn opencl_with_ptr_out<F, P, const OP: u32>(value: F) -> (F, P)
+where
+    F: Default + Copy,
+    P: Default + Copy,
+{
+    let mut result = F::default();
+    let mut out = P::default();
+    unsafe {
+        asm! {
+            "%opencl = OpExtInstImport \"OpenCL.std\"",
+            "%v = OpLoad _ {value}",
+            "%result = OpExtInst typeof*{result} %opencl {op} %v {out}",
+            "OpStore {result} %result",
+            value = in(reg) &value,
+            out = in(reg) &mut out,
+            result = in(reg) &mut result,
+            op = const OP,
+        }
+    }
+    (result, out)
+}
+
+/// Same as `opencl_with_ptr_out` but takes two input values instead of
+/// one. Used by `remquo` (binary op with an i32 out-param).
+#[cfg(target_arch = "spirv")]
+unsafe fn opencl_binary_with_ptr_out<F, P, const OP: u32>(a: F, b: F) -> (F, P)
+where
+    F: Default + Copy,
+    P: Default + Copy,
+{
+    let mut result = F::default();
+    let mut out = P::default();
+    unsafe {
+        asm! {
+            "%opencl = OpExtInstImport \"OpenCL.std\"",
+            "%a = OpLoad _ {a}",
+            "%b = OpLoad _ {b}",
+            "%result = OpExtInst typeof*{result} %opencl {op} %a %b {out}",
+            "OpStore {result} %result",
+            a = in(reg) &a,
+            b = in(reg) &b,
+            out = in(reg) &mut out,
+            result = in(reg) &mut result,
+            op = const OP,
+        }
+    }
+    (result, out)
+}
+
+// ── Float, unary ──────────────────────────────────────────────────────
+
+macro_rules! float_unary {
+    // Two forms: with an explicit per-scalar host fallback (expressed as a
+    // function on one `F::Scalar`), and without — the latter still resolves
+    // via `gpu_only` to an `unimplemented!()` stub and is tracked for follow-up.
+    //
+    // The `host_scalar = …` arm takes a path-style function (e.g. `f.sqrt()`
+    // expressed as the closure `|f| f.sqrt()`); the closure is monomorphised
+    // separately per scalar type at each public call site, so `Float`-trait
+    // methods that exist on both `f32` and `f64` work uniformly.
+    ($(#[$attr:meta])* $name:ident, $opcode:expr, host_scalar = $host:expr $(,)?) => {
+        $(#[$attr])*
+        #[inline]
+        pub fn $name<F: FloatOrFloatVector>(x: F) -> F
+        where
+            F::Scalar: Float,
+        {
+            #[cfg(target_arch = "spirv")]
+            { unsafe { opencl_unary::<F, $opcode>(x) } }
+            #[cfg(not(target_arch = "spirv"))]
+            {
+                // `Componentwise` is reachable via the host-only supertrait
+                // of `FloatOrFloatVector`, so no explicit `use` is needed —
+                // the method is found through that bound.
+                x.map_componentwise($host)
+            }
+        }
+    };
+    ($(#[$attr:meta])* $name:ident, $opcode:expr) => {
+        $(#[$attr])*
+        #[spirv_std_macros::gpu_only]
+        #[inline]
+        pub fn $name<F: FloatOrFloatVector>(x: F) -> F
+        where
+            F::Scalar: Float,
+        {
+            unsafe { opencl_unary::<F, $opcode>(x) }
+        }
+    };
+}
+
+// All unary host arms route through `num_traits::Float` so the same closure
+// monomorphises correctly for both `f32` and `f64` per call site. The `nf`
+// alias keeps the table readable.
+float_unary!(
+    /// Inverse cosine (`acos(x)`).
+    acos, 0,
+    host_scalar = |x| num_traits::Float::acos(x),
+);
+float_unary!(
+    /// Inverse hyperbolic cosine (`acosh(x)`).
+    acosh, 1,
+    host_scalar = |x| num_traits::Float::acosh(x),
+);
+float_unary!(
+    /// Inverse sine (`asin(x)`).
+    asin, 3,
+    host_scalar = |x| num_traits::Float::asin(x),
+);
+float_unary!(
+    /// Inverse hyperbolic sine (`asinh(x)`).
+    asinh, 4,
+    host_scalar = |x| num_traits::Float::asinh(x),
+);
+float_unary!(
+    /// Inverse tangent (`atan(x)`).
+    atan, 6,
+    host_scalar = |x| num_traits::Float::atan(x),
+);
+float_unary!(
+    /// Inverse hyperbolic tangent (`atanh(x)`).
+    atanh, 8,
+    host_scalar = |x| num_traits::Float::atanh(x),
+);
+float_unary!(
+    /// Cube root (`cbrt(x)`).
+    cbrt, 11,
+    host_scalar = |x| num_traits::Float::cbrt(x),
+);
+float_unary!(
+    /// Round up to nearest integer (`ceil(x)`).
+    ceil, 12,
+    host_scalar = |x| num_traits::Float::ceil(x),
+);
+float_unary!(
+    /// Cosine (`cos(x)`).
+    cos, 14,
+    host_scalar = |x| num_traits::Float::cos(x),
+);
+float_unary!(
+    /// Hyperbolic cosine (`cosh(x)`).
+    cosh, 15,
+    host_scalar = |x| num_traits::Float::cosh(x),
+);
+float_unary!(
+    /// Natural exponent (`e^x`).
+    exp, 19,
+    host_scalar = |x| num_traits::Float::exp(x),
+);
+float_unary!(
+    /// Base-2 exponent (`2^x`).
+    exp2, 20,
+    host_scalar = |x| num_traits::Float::exp2(x),
+);
+float_unary!(
+    /// Base-10 exponent (`10^x`).
+    exp10, 21,
+    host_scalar = |x| num_traits::Float::powf(num_traits::cast(10.0).unwrap(), x),
+);
+float_unary!(
+    /// Absolute value (`|x|`).
+    fabs, 23,
+    host_scalar = |x| num_traits::Float::abs(x),
+);
+float_unary!(
+    /// Round down to nearest integer (`floor(x)`).
+    floor, 25,
+    host_scalar = |x| num_traits::Float::floor(x),
+);
+float_unary!(
+    /// Natural logarithm (`ln(x)`).
+    log, 37,
+    host_scalar = |x| num_traits::Float::ln(x),
+);
+float_unary!(
+    /// Base-2 logarithm.
+    log2, 38,
+    host_scalar = |x| num_traits::Float::log2(x),
+);
+float_unary!(
+    /// Base-10 logarithm.
+    log10, 39,
+    host_scalar = |x| num_traits::Float::log10(x),
+);
+float_unary!(
+    /// Round to nearest integer, ties away from zero.
+    round, 55,
+    host_scalar = |x| num_traits::Float::round(x),
+);
+float_unary!(
+    /// Reciprocal square root (`1/sqrt(x)`).
+    rsqrt, 56,
+    host_scalar = |x| num_traits::Float::recip(num_traits::Float::sqrt(x)),
+);
+float_unary!(
+    /// Sine (`sin(x)`).
+    sin, 57,
+    host_scalar = |x| num_traits::Float::sin(x),
+);
+float_unary!(
+    /// Hyperbolic sine.
+    sinh, 59,
+    host_scalar = |x| num_traits::Float::sinh(x),
+);
+float_unary!(
+    /// Square root.
+    sqrt, 61,
+    host_scalar = |x| num_traits::Float::sqrt(x),
+);
+float_unary!(
+    /// Tangent.
+    tan, 62,
+    host_scalar = |x| num_traits::Float::tan(x),
+);
+float_unary!(
+    /// Hyperbolic tangent.
+    tanh, 63,
+    host_scalar = |x| num_traits::Float::tanh(x),
+);
+float_unary!(
+    /// Truncate toward zero.
+    trunc, 66,
+    host_scalar = |x| num_traits::Float::trunc(x),
+);
+float_unary!(
+    /// Sign of `x`: `-1`, `0`, or `+1`.
+    sign, 103,
+    host_scalar = |x| num_traits::Float::signum(x),
+);
+
+// `native_*` — implementation-defined-precision, faster than IEEE.
+// On host we just use the IEEE versions; there's no faster CPU primitive.
+
+float_unary!(
+    /// Faster, lower-precision cosine. ULP error is implementation-defined.
+    native_cos, 81,
+    host_scalar = |x| num_traits::Float::cos(x),
+);
+float_unary!(
+    /// Faster, lower-precision sine. ULP error is implementation-defined.
+    native_sin, 92,
+    host_scalar = |x| num_traits::Float::sin(x),
+);
+float_unary!(
+    /// Faster, lower-precision square root. ULP error is implementation-defined.
+    native_sqrt, 93,
+    host_scalar = |x| num_traits::Float::sqrt(x),
+);
+float_unary!(
+    /// Faster, lower-precision natural exponent. ULP error is implementation-defined.
+    native_exp, 83,
+    host_scalar = |x| num_traits::Float::exp(x),
+);
+float_unary!(
+    /// Faster, lower-precision natural logarithm. ULP error is implementation-defined.
+    native_log, 86,
+    host_scalar = |x| num_traits::Float::ln(x),
+);
+
+// ── Float, unary (libm-backed) ───────────────────────────────────────
+//
+// These functions have no `num_traits::Float` equivalent, so we can't
+// use `float_unary!` with `host_scalar`. Written manually with
+// `LibmExt` host fallbacks.
+
+/// Error function.
+#[inline]
+pub fn erf<F: FloatOrFloatVector>(x: F) -> F
+where
+    F::Scalar: Float + LibmExt,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<F, 18>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.map_componentwise(LibmExt::libm_erf)
+    }
+}
+
+/// Complementary error function (`1 - erf(x)`).
+#[inline]
+pub fn erfc<F: FloatOrFloatVector>(x: F) -> F
+where
+    F::Scalar: Float + LibmExt,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<F, 17>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.map_componentwise(LibmExt::libm_erfc)
+    }
+}
+
+/// Natural logarithm of the absolute value of the gamma function.
+#[inline]
+pub fn lgamma<F: FloatOrFloatVector>(x: F) -> F
+where
+    F::Scalar: Float + LibmExt,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<F, 35>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.map_componentwise(LibmExt::libm_lgamma)
+    }
+}
+
+/// Gamma function.
+#[inline]
+pub fn tgamma<F: FloatOrFloatVector>(x: F) -> F
+where
+    F::Scalar: Float + LibmExt,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<F, 65>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.map_componentwise(LibmExt::libm_tgamma)
+    }
+}
+
+// ── Float, binary ─────────────────────────────────────────────────────
+
+macro_rules! float_binary {
+    ($(#[$attr:meta])* $name:ident, $opcode:expr, host_scalar = $host:expr $(,)?) => {
+        $(#[$attr])*
+        #[inline]
+        pub fn $name<F: FloatOrFloatVector>(a: F, b: F) -> F
+        where
+            F::Scalar: Float,
+        {
+            #[cfg(target_arch = "spirv")]
+            { unsafe { opencl_binary::<F, $opcode>(a, b) } }
+            #[cfg(not(target_arch = "spirv"))]
+            { a.zip_componentwise(b, $host) }
+        }
+    };
+    ($(#[$attr:meta])* $name:ident, $opcode:expr) => {
+        $(#[$attr])*
+        #[spirv_std_macros::gpu_only]
+        #[inline]
+        pub fn $name<F: FloatOrFloatVector>(a: F, b: F) -> F
+        where
+            F::Scalar: Float,
+        {
+            unsafe { opencl_binary::<F, $opcode>(a, b) }
+        }
+    };
+}
+
+float_binary!(
+    /// Two-argument arctangent (`atan2(y, x)`), correctly handling quadrants.
+    atan2, 7,
+    host_scalar = |a, b| num_traits::Float::atan2(a, b),
+);
+float_binary!(
+    /// Magnitude of `a` with the sign of `b`.
+    copysign, 13,
+    host_scalar = |a, b| num_traits::Float::copysign(a, b),
+);
+float_binary!(
+    /// Maximum of two floats. Follows IEEE-754 `maxNum` for NaN handling.
+    fmax, 27,
+    host_scalar = |a, b| num_traits::Float::max(a, b),
+);
+float_binary!(
+    /// Minimum of two floats. Follows IEEE-754 `minNum` for NaN handling.
+    fmin, 28,
+    host_scalar = |a, b| num_traits::Float::min(a, b),
+);
+float_binary!(
+    /// Floating-point modulo (sign matches the dividend `a`).
+    fmod, 29,
+    host_scalar = |a, b| a - num_traits::Float::trunc(a / b) * b,
+);
+float_binary!(
+    /// Square root of `a*a + b*b` without overflow / underflow for large/small inputs.
+    hypot, 32,
+    host_scalar = |a, b| num_traits::Float::hypot(a, b),
+);
+float_binary!(
+    /// `a` raised to the power `b`.
+    pow, 48,
+    host_scalar = |a, b| num_traits::Float::powf(a, b),
+);
+
+// ── Float, binary (libm-backed) ──────────────────────────────────────
+
+/// Positive difference: `max(a - b, 0)`.
+#[inline]
+pub fn fdim<F: FloatOrFloatVector>(a: F, b: F) -> F
+where
+    F::Scalar: Float + LibmExt,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<F, 24>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, LibmExt::libm_fdim)
+    }
+}
+
+/// Next representable floating-point value after `a` in the direction of `b`.
+#[inline]
+pub fn nextafter<F: FloatOrFloatVector>(a: F, b: F) -> F
+where
+    F::Scalar: Float + LibmExt,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<F, 47>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, LibmExt::libm_nextafter)
+    }
+}
+
+/// IEEE 754 remainder of `a / b`.
+#[inline]
+pub fn remainder<F: FloatOrFloatVector>(a: F, b: F) -> F
+where
+    F::Scalar: Float + LibmExt,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<F, 51>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, LibmExt::libm_remainder)
+    }
+}
+
+// ── Float, custom signatures ─────────────────────────────────────────
+
+/// Extract the exponent of `x` as a signed integer: `floor(log2(|x|))`.
+///
+/// Scalar-only — `OpenCL` `ilogb` returns `int` for scalar float input.
+#[inline]
+pub fn ilogb<F: Float + Default + Copy + LibmExt>(x: F) -> i32 {
+    #[cfg(target_arch = "spirv")]
+    {
+        let mut result = 0i32;
+        unsafe {
+            asm! {
+                "%opencl = OpExtInstImport \"OpenCL.std\"",
+                "%x = OpLoad _ {x}",
+                "%result = OpExtInst typeof*{result} %opencl 33 %x",
+                "OpStore {result} %result",
+                x = in(reg) &x,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        LibmExt::libm_ilogb(x)
+    }
+}
+
+/// Multiply `x` by 2 raised to the power `n`: `x * 2^n`.
+///
+/// Scalar-only — `OpenCL` `ldexp` takes `(float, int)`.
+#[inline]
+pub fn ldexp<F: Float + Default + Copy + LibmExt>(x: F, n: i32) -> F {
+    #[cfg(target_arch = "spirv")]
+    {
+        let mut result = F::default();
+        unsafe {
+            asm! {
+                "%opencl = OpExtInstImport \"OpenCL.std\"",
+                "%x = OpLoad _ {x}",
+                "%n = OpLoad _ {n}",
+                "%result = OpExtInst typeof*{result} %opencl 34 %x %n",
+                "OpStore {result} %result",
+                x = in(reg) &x,
+                n = in(reg) &n,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        LibmExt::libm_ldexp(x, n)
+    }
+}
+
+// ── Float, ternary ────────────────────────────────────────────────────
+
+macro_rules! float_ternary {
+    ($(#[$attr:meta])* $name:ident, $opcode:expr, host_scalar = $host:expr $(,)?) => {
+        $(#[$attr])*
+        #[inline]
+        pub fn $name<F: FloatOrFloatVector>(a: F, b: F, c: F) -> F
+        where
+            F::Scalar: Float,
+        {
+            #[cfg(target_arch = "spirv")]
+            { unsafe { opencl_ternary::<F, $opcode>(a, b, c) } }
+            #[cfg(not(target_arch = "spirv"))]
+            { a.zip3_componentwise(b, c, $host) }
+        }
+    };
+    ($(#[$attr:meta])* $name:ident, $opcode:expr) => {
+        $(#[$attr])*
+        #[spirv_std_macros::gpu_only]
+        #[inline]
+        pub fn $name<F: FloatOrFloatVector>(a: F, b: F, c: F) -> F
+        where
+            F::Scalar: Float,
+        {
+            unsafe { opencl_ternary::<F, $opcode>(a, b, c) }
+        }
+    };
+}
+
+float_ternary!(
+    /// Fused multiply-add: `a * b + c`, computed with a single rounding (IEEE-754).
+    fma, 26,
+    host_scalar = |a, b, c| num_traits::Float::mul_add(a, b, c),
+);
+float_ternary!(
+    /// Multiply-add `a * b + c` with implementation-defined intermediate precision.
+    /// For IEEE-754 determinism, use [`fma`] instead.
+    mad, 42,
+    host_scalar = |a, b, c| a * b + c,
+);
+float_ternary!(
+    /// Clamp `x` to the closed interval `[min, max]`. Argument order: `(x, min, max)`.
+    clamp, 95,
+    host_scalar = |x, lo, hi| num_traits::Float::min(num_traits::Float::max(x, lo), hi),
+);
+float_ternary!(
+    /// Linear interpolation: `a + (b - a) * t`. Argument order: `(a, b, t)`.
+    mix, 99,
+    host_scalar = |a, b, t| a + (b - a) * t,
+);
+float_ternary!(
+    /// Smooth Hermite interpolation between `0` and `1` for `x` in `[edge0, edge1]`.
+    /// Argument order: `(edge0, edge1, x)`.
+    smoothstep, 102,
+    host_scalar = |edge0, edge1, x| smoothstep_scalar(edge0, edge1, x),
+);
+
+/// Host scalar implementation of `smoothstep`. Pinning the scalar type
+/// here lets `num_traits::cast` infer the target without `let`-side
+/// annotations in the macro-expansion site.
+#[cfg(not(target_arch = "spirv"))]
+#[inline]
+fn smoothstep_scalar<F: Float>(edge0: F, edge1: F, x: F) -> F {
+    let zero = F::zero();
+    let one = F::one();
+    let two = num_traits::cast::<f64, F>(2.0).unwrap();
+    let three = num_traits::cast::<f64, F>(3.0).unwrap();
+    let t = num_traits::Float::min(
+        num_traits::Float::max((x - edge0) / (edge1 - edge0), zero),
+        one,
+    );
+    t * t * (three - two * t)
+}
+
+// ── Integer, unary ────────────────────────────────────────────────────
+
+/// Absolute value of a signed integer (or componentwise on a signed vector).
+#[inline]
+pub fn s_abs<I: SignedIntegerOrSignedVector>(x: I) -> I
+where
+    I::Scalar: SignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<I, 141>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.map_componentwise(|c| {
+            // `num_traits::Signed::abs` works for every signed primitive.
+            num_traits::Signed::abs(&c)
+        })
+    }
+}
+
+/// Number of set bits (popcount), componentwise on vectors.
+#[inline]
+pub fn popcount<I: IntegerOrIntegerVector>(x: I) -> I
+where
+    I::Scalar: Integer,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<I, 166>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        // `count_ones()` returns u32; convert back to the input scalar
+        // via num_traits::cast to fit any Integer impl.
+        x.map_componentwise(|c| num_traits::cast(num_traits::PrimInt::count_ones(c)).unwrap())
+    }
+}
+
+/// Count leading zero bits, componentwise on vectors.
+#[inline]
+pub fn clz<I: IntegerOrIntegerVector>(x: I) -> I
+where
+    I::Scalar: Integer,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<I, 151>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.map_componentwise(|c| num_traits::cast(num_traits::PrimInt::leading_zeros(c)).unwrap())
+    }
+}
+
+/// Count trailing zero bits, componentwise on vectors.
+#[inline]
+pub fn ctz<I: IntegerOrIntegerVector>(x: I) -> I
+where
+    I::Scalar: Integer,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<I, 152>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.map_componentwise(|c| num_traits::cast(num_traits::PrimInt::trailing_zeros(c)).unwrap())
+    }
+}
+
+/// Reverse all bits, componentwise on vectors.
+///
+/// Requires `BitInstructions` capability (`cl_khr_extended_bit_ops`).
+#[inline]
+pub fn bit_reverse<I: IntegerOrIntegerVector>(x: I) -> I
+where
+    I::Scalar: Integer,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        let mut result = I::default();
+        unsafe {
+            core::arch::asm! {
+                "%x = OpLoad _ {x}",
+                "%result = OpBitReverse typeof*{result} %x",
+                "OpStore {result} %result",
+                x = in(reg) &x,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.map_componentwise(|c| num_traits::PrimInt::reverse_bits(c))
+    }
+}
+
+// ── Integer, binary ───────────────────────────────────────────────────
+
+/// Minimum of two signed integers (or componentwise on signed vectors).
+#[inline]
+pub fn s_min<I: SignedIntegerOrSignedVector>(a: I, b: I) -> I
+where
+    I::Scalar: SignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<I, 158>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, core::cmp::min)
+    }
+}
+
+/// Maximum of two signed integers (or componentwise on signed vectors).
+#[inline]
+pub fn s_max<I: SignedIntegerOrSignedVector>(a: I, b: I) -> I
+where
+    I::Scalar: SignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<I, 156>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, core::cmp::max)
+    }
+}
+
+/// Minimum of two unsigned integers (or componentwise on unsigned vectors).
+#[inline]
+pub fn u_min<I: UnsignedIntegerOrUnsignedVector>(a: I, b: I) -> I
+where
+    I::Scalar: UnsignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<I, 159>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, core::cmp::min)
+    }
+}
+
+/// Maximum of two unsigned integers (or componentwise on unsigned vectors).
+#[inline]
+pub fn u_max<I: UnsignedIntegerOrUnsignedVector>(a: I, b: I) -> I
+where
+    I::Scalar: UnsignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<I, 157>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, core::cmp::max)
+    }
+}
+
+// ── Integer, saturating ───────────────────────────────────────────────
+
+/// Saturating addition of two signed integers (or componentwise on
+/// signed vectors). Clamps to `[I::MIN, I::MAX]` instead of wrapping.
+#[inline]
+pub fn s_add_sat<I: SignedIntegerOrSignedVector>(a: I, b: I) -> I
+where
+    I::Scalar: SignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<I, 143>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, num_traits::Saturating::saturating_add)
+    }
+}
+
+/// Saturating addition of two unsigned integers (or componentwise on
+/// unsigned vectors). Clamps to `[0, U::MAX]` instead of wrapping.
+#[inline]
+pub fn u_add_sat<I: UnsignedIntegerOrUnsignedVector>(a: I, b: I) -> I
+where
+    I::Scalar: UnsignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<I, 144>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, num_traits::Saturating::saturating_add)
+    }
+}
+
+/// Saturating subtraction of two signed integers (or componentwise on
+/// signed vectors). Clamps to `[I::MIN, I::MAX]` instead of wrapping.
+#[inline]
+pub fn s_sub_sat<I: SignedIntegerOrSignedVector>(a: I, b: I) -> I
+where
+    I::Scalar: SignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<I, 162>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, num_traits::Saturating::saturating_sub)
+    }
+}
+
+/// Saturating subtraction of two unsigned integers (or componentwise on
+/// unsigned vectors). Clamps to `[0, U::MAX]` instead of wrapping.
+#[inline]
+pub fn u_sub_sat<I: UnsignedIntegerOrUnsignedVector>(a: I, b: I) -> I
+where
+    I::Scalar: UnsignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<I, 163>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, num_traits::Saturating::saturating_sub)
+    }
+}
+
+// ── Integer, ternary ──────────────────────────────────────────────────
+
+/// Clamp a signed integer `x` to `[min, max]` (or componentwise on
+/// signed vectors). Argument order: `(x, min, max)`.
+#[inline]
+pub fn s_clamp<I: SignedIntegerOrSignedVector>(x: I, min: I, max: I) -> I
+where
+    I::Scalar: SignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_ternary::<I, 149>(x, min, max) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.zip3_componentwise(min, max, |x, lo, hi| {
+            core::cmp::min(core::cmp::max(x, lo), hi)
+        })
+    }
+}
+
+/// Clamp an unsigned integer `x` to `[min, max]` (or componentwise on
+/// unsigned vectors). Argument order: `(x, min, max)`.
+#[inline]
+pub fn u_clamp<I: UnsignedIntegerOrUnsignedVector>(x: I, min: I, max: I) -> I
+where
+    I::Scalar: UnsignedInteger,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_ternary::<I, 150>(x, min, max) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        x.zip3_componentwise(min, max, |x, lo, hi| {
+            core::cmp::min(core::cmp::max(x, lo), hi)
+        })
+    }
+}
+
+// ── Geometric ─────────────────────────────────────────────────────────
+//
+// `length`/`distance`/`fast_length`/`fast_distance` return the per-
+// component scalar type of the input (e.g. `length(Vec3) -> f32`).
+// `normalize`/`fast_normalize`/`cross` return the input vector type.
+//
+// Per the `OpenCL.std` spec, `cross` is restricted to vec3/vec4. The
+// `FloatOrFloatVector` bound is wider; passing other types compiles
+// but produces SPIR-V that `spirv-val` rejects. (Defining a tighter
+// trait would buy nothing — the constraint only matters for `cross`.)
+
+/// Vector length (Euclidean norm). For a vector `v`, returns
+/// `sqrt(dot(v, v))`. Also accepts a scalar (returns its absolute value).
+#[inline]
+pub fn length<V: FloatOrFloatVector>(v: V) -> V::Scalar
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary_to_scalar::<V, 106>(v) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        num_traits::Float::sqrt(dot(v, v))
+    }
+}
+
+/// Distance between two vectors: `length(a - b)`.
+#[inline]
+pub fn distance<V: FloatOrFloatVector>(a: V, b: V) -> V::Scalar
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary_to_scalar::<V, 105>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        length(a.zip_componentwise(b, |x, y| x - y))
+    }
+}
+
+/// Returns `v` scaled to unit length: `v / length(v)`.
+#[inline]
+pub fn normalize<V: FloatOrFloatVector>(v: V) -> V
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<V, 107>(v) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        let len = length(v);
+        v.map_componentwise(|x| x / len)
+    }
+}
+
+/// Cross product of two 3- or 4-component float vectors.
+///
+/// Per the `OpenCL.std` spec, only `Vec3`/`Vec3A`/`Vec4` (and `DVec3`/
+/// `DVec4`) are valid; passing other `FloatOrFloatVector` types
+/// produces SPIR-V that `spirv-val` rejects. The host fallback panics
+/// for inputs of other widths so callers see a fast failure rather than
+/// silently wrong values.
+#[inline]
+pub fn cross<V: FloatOrFloatVector>(a: V, b: V) -> V
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary::<V, 104>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        // Materialise `a` and `b` into per-component arrays via
+        // fold_componentwise so we can index them positionally. The
+        // length must be 3 or 4 — anything else is a misuse.
+        let mut a_buf = [V::Scalar::default(); 4];
+        let mut b_buf = [V::Scalar::default(); 4];
+        let mut n = 0usize;
+        a.fold_componentwise((), |(), x| {
+            if n < a_buf.len() {
+                a_buf[n] = x;
+            }
+            n += 1;
+        });
+        let len = n;
+        let mut m = 0usize;
+        b.fold_componentwise((), |(), y| {
+            if m < b_buf.len() {
+                b_buf[m] = y;
+            }
+            m += 1;
+        });
+        assert!(
+            len == 3 || len == 4,
+            "ocl::cross host fallback: only width-3 or width-4 vectors are valid",
+        );
+        // For width-4 the OpenCL spec returns the cross of the .xyz lanes
+        // with the w lane zeroed out. Same here.
+        let cx = a_buf[1] * b_buf[2] - a_buf[2] * b_buf[1];
+        let cy = a_buf[2] * b_buf[0] - a_buf[0] * b_buf[2];
+        let cz = a_buf[0] * b_buf[1] - a_buf[1] * b_buf[0];
+        let mut idx = 0usize;
+        a.map_componentwise(|_| {
+            let v = match idx {
+                0 => cx,
+                1 => cy,
+                2 => cz,
+                _ => V::Scalar::default(),
+            };
+            idx += 1;
+            v
+        })
+    }
+}
+
+/// Faster, lower-precision `length`. ULP error is implementation-defined.
+/// On host we just delegate to the IEEE version.
+#[inline]
+pub fn fast_length<V: FloatOrFloatVector>(v: V) -> V::Scalar
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary_to_scalar::<V, 109>(v) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        length(v)
+    }
+}
+
+/// Faster, lower-precision `distance`. ULP error is implementation-defined.
+/// On host we just delegate to the IEEE version.
+#[inline]
+pub fn fast_distance<V: FloatOrFloatVector>(a: V, b: V) -> V::Scalar
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary_to_scalar::<V, 108>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        distance(a, b)
+    }
+}
+
+/// Faster, lower-precision `normalize`. ULP error is implementation-defined.
+/// On host we just delegate to the IEEE version.
+#[inline]
+pub fn fast_normalize<V: FloatOrFloatVector>(v: V) -> V
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_unary::<V, 110>(v) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        normalize(v)
+    }
+}
+
+/// Vector dot product: `Σᵢ aᵢ · bᵢ`.
+///
+/// Lowers to the core SPIR-V `OpDot` instruction (opcode 148), not an
+/// `OpenCL.std` extended instruction — `OpDot` is part of core SPIR-V
+/// and the `OpenCL` SPIR-V environment spec lists it without any extra
+/// capability requirement, so it's always available on Kernel modules.
+/// Exposed here next to the `OpenCL.std` geometric ops for
+/// discoverability — the geometric family
+/// (`length`/`distance`/`normalize`/etc.) is conceptually built on
+/// `dot`, so callers expect to find them together.
+///
+/// Operands must both be float vectors of the same length (2/3/4);
+/// scalar arguments are not accepted by `OpDot`. Use `a * b` for the
+/// scalar case.
+#[inline]
+pub fn dot<V: FloatOrFloatVector>(a: V, b: V) -> V::Scalar
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        let mut result = V::Scalar::default();
+        unsafe {
+            asm! {
+                "%a = OpLoad _ {a}",
+                "%b = OpLoad _ {b}",
+                "%result = OpDot typeof*{result} %a %b",
+                "OpStore {result} %result",
+                a = in(reg) &a,
+                b = in(reg) &b,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, |x, y| x * y)
+            .fold_componentwise(V::Scalar::default(), |s, x| s + x)
+    }
+}
+
+// ── Vector arithmetic ────────────────────────────────────────────────
+//
+// Component-wise binary float ops on vectors (or scalars). Lower to
+// the core SPIR-V `OpFAdd`/`OpFSub`/`OpFMul`/`OpFDiv` instructions
+// directly — these are core SPIR-V (no capability) and work on both
+// scalar and vector operands. Exposed here so that callers who want
+// guaranteed-vector codegen can reach for them; using `a + b` etc. on
+// `glam` types currently relies on LLVM auto-vectorisation to refuse
+// the per-component scalarisation, which is brittle for anything
+// beyond the simplest expressions.
+
+/// Component-wise float addition: `a + b`. Lowers to a single
+/// `OpFAdd %T %a %b`.
+///
+/// `a + b` on `glam` types may scalarise to per-component
+/// `OpCompositeExtract` + scalar `OpFAdd` + `OpCompositeConstruct`
+/// depending on the surrounding expression; this function guarantees
+/// the vector instruction.
+#[inline]
+pub fn add<V: FloatOrFloatVector>(a: V, b: V) -> V
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        let mut result = V::default();
+        unsafe {
+            asm! {
+                "%a = OpLoad _ {a}",
+                "%b = OpLoad _ {b}",
+                "%result = OpFAdd typeof*{result} %a %b",
+                "OpStore {result} %result",
+                a = in(reg) &a,
+                b = in(reg) &b,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, |x, y| x + y)
+    }
+}
+
+/// Component-wise float subtraction: `a - b`. Lowers to a single
+/// `OpFSub %T %a %b`. See [`add`] for the rationale on exposing it.
+#[inline]
+pub fn sub<V: FloatOrFloatVector>(a: V, b: V) -> V
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        let mut result = V::default();
+        unsafe {
+            asm! {
+                "%a = OpLoad _ {a}",
+                "%b = OpLoad _ {b}",
+                "%result = OpFSub typeof*{result} %a %b",
+                "OpStore {result} %result",
+                a = in(reg) &a,
+                b = in(reg) &b,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, |x, y| x - y)
+    }
+}
+
+/// Component-wise float multiplication: `a * b`. Lowers to a single
+/// `OpFMul %T %a %b`. See [`add`] for the rationale on exposing it.
+///
+/// For vector × scalar, lift the scalar to a vector first (e.g.
+/// `Vec3::splat(s)`); this function does not perform that broadcast.
+#[inline]
+pub fn mul<V: FloatOrFloatVector>(a: V, b: V) -> V
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        let mut result = V::default();
+        unsafe {
+            asm! {
+                "%a = OpLoad _ {a}",
+                "%b = OpLoad _ {b}",
+                "%result = OpFMul typeof*{result} %a %b",
+                "OpStore {result} %result",
+                a = in(reg) &a,
+                b = in(reg) &b,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, |x, y| x * y)
+    }
+}
+
+/// Component-wise float division: `a / b`. Lowers to a single
+/// `OpFDiv %T %a %b`. See [`add`] for the rationale on exposing it.
+#[inline]
+pub fn div<V: FloatOrFloatVector>(a: V, b: V) -> V
+where
+    V::Scalar: Float,
+{
+    #[cfg(target_arch = "spirv")]
+    {
+        let mut result = V::default();
+        unsafe {
+            asm! {
+                "%a = OpLoad _ {a}",
+                "%b = OpLoad _ {b}",
+                "%result = OpFDiv typeof*{result} %a %b",
+                "OpStore {result} %result",
+                a = in(reg) &a,
+                b = in(reg) &b,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        a.zip_componentwise(b, |x, y| x / y)
+    }
+}
+
+// ── Multi-output ops ──────────────────────────────────────────────────
+//
+// These map to `OpenCL.std` ops that produce two outputs (the function's
+// return value plus one written through a pointer). Exposed here as
+// tuple-returning functions; the helper allocates the out-pointer's
+// backing slot internally so callers don't need to thread an `&mut`
+// argument through.
+//
+// Scalar-only for now — vector forms are mechanically the same but
+// would multiply test surface; deferred.
+
+/// Splits `value` into its fractional part (returned) and the integer
+/// part `floor(value)` (second tuple element). Fractional part is in
+/// `[0.0, 1.0)`.
+#[inline]
+pub fn fract<F: Float + Default>(value: F) -> (F, F) {
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_with_ptr_out::<F, F, 30>(value) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        let i = num_traits::Float::floor(value);
+        (value - i, i)
+    }
+}
+
+/// Decomposes `value` into `(fractional, integer)` parts (sign-preserving).
+/// The integer part is `trunc(value)`.
+#[inline]
+pub fn modf<F: Float + Default>(value: F) -> (F, F) {
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_with_ptr_out::<F, F, 45>(value) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        let i = num_traits::Float::trunc(value);
+        (value - i, i)
+    }
+}
+
+/// Decomposes `value` into `(mantissa, exponent)` such that
+/// `value = mantissa * 2^exponent` and `|mantissa| ∈ [0.5, 1.0)`.
+#[inline]
+pub fn frexp<F: Float + Default>(value: F) -> (F, i32) {
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_with_ptr_out::<F, i32, 31>(value) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        // OpenCL spec form: value = mantissa * 2^exp where
+        // |mantissa| ∈ [0.5, 1.0). Compute exp from `log2(|value|)`,
+        // then divide out the power of two.
+        let abs = num_traits::Float::abs(value);
+        if abs == F::zero() {
+            return (F::zero(), 0);
+        }
+        let exp = num_traits::ToPrimitive::to_i32(&num_traits::Float::floor(
+            num_traits::Float::log2(abs),
+        ))
+        .unwrap_or(0)
+            + 1;
+        let two = num_traits::cast::<f64, F>(2.0).unwrap();
+        let scale = num_traits::Float::powi(two, -exp);
+        (value * scale, exp)
+    }
+}
+
+/// Computes `(sin(value), cos(value))` in one call.
+#[inline]
+pub fn sincos<F: Float + Default>(value: F) -> (F, F) {
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_with_ptr_out::<F, F, 58>(value) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        (num_traits::Float::sin(value), num_traits::Float::cos(value))
+    }
+}
+
+/// Log-gamma with sign: returns `(lgamma(x), sign)` where `sign` is
+/// `+1` or `-1` indicating the sign of `Gamma(x)`.
+#[inline]
+pub fn lgamma_r<F: Float + Default + LibmExt>(x: F) -> (F, i32) {
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_with_ptr_out::<F, i32, 36>(x) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        LibmExt::libm_lgamma_r(x)
+    }
+}
+
+/// Compute the remainder and part of the quotient of `a / b`.
+/// Returns `(remainder, quotient_bits)` where the remainder has the
+/// same sign as `a / b` and at least the three low-order bits of the
+/// integral quotient.
+#[inline]
+pub fn remquo<F: Float + Default + LibmExt>(a: F, b: F) -> (F, i32) {
+    #[cfg(target_arch = "spirv")]
+    {
+        unsafe { opencl_binary_with_ptr_out::<F, i32, 52>(a, b) }
+    }
+    #[cfg(not(target_arch = "spirv"))]
+    {
+        LibmExt::libm_remquo(a, b)
+    }
+}
+
+// Host-side smoke tests for the host arms of `opencl_std`. Compiled
+// out on SPIR-V via `cfg(test)`; exercise that the host bodies type-
+// check and produce plausible numeric results across both glam and
+// `cl::*` inputs at multiple op categories (unary/binary/ternary,
+// vector geometric, integer, multi-output).
+#[cfg(all(test, not(target_arch = "spirv")))]
+mod tests {
+    use super::*;
+    use crate::glam::{DVec3, IVec3, Vec3};
+
+    const EPS: f64 = 1e-12;
+
+    // The `cl::*` types arrive in a later commit; tests that exercise them
+    // through `opencl_std` live alongside their definitions.
+
+    #[test]
+    fn dot_glam_host() {
+        let a = DVec3::new(1.0, 2.0, 3.0);
+        let b = DVec3::new(4.0, -5.0, 6.0);
+        assert_eq!(dot(a, b), 4.0 - 10.0 + 18.0);
+    }
+
+    #[test]
+    fn unary_scalar_host() {
+        assert!((rsqrt(4.0_f64) - 0.5).abs() < EPS);
+        assert!((sqrt(9.0_f64) - 3.0).abs() < EPS);
+        assert!((cos(0.0_f64) - 1.0).abs() < EPS);
+        assert!((sin(0.0_f64)).abs() < EPS);
+        assert!((exp(0.0_f64) - 1.0).abs() < EPS);
+        assert!((log(num_traits::Float::exp(1.0_f64)) - 1.0).abs() < EPS);
+        assert_eq!(fabs(-3.5_f64), 3.5);
+        assert_eq!(floor(2.7_f64), 2.0);
+        assert_eq!(ceil(2.1_f64), 3.0);
+    }
+
+    #[test]
+    fn unary_vector_host() {
+        let v = DVec3::new(4.0, 16.0, 0.25);
+        let r = rsqrt(v);
+        assert!((r.x - 0.5).abs() < EPS);
+        assert!((r.y - 0.25).abs() < EPS);
+        assert!((r.z - 2.0).abs() < EPS);
+    }
+
+    #[test]
+    fn binary_host() {
+        assert!((atan2(1.0_f64, 0.0) - core::f64::consts::FRAC_PI_2).abs() < EPS);
+        assert_eq!(fmax(2.0_f64, 5.0), 5.0);
+        assert_eq!(fmin(2.0_f64, 5.0), 2.0);
+        assert!((pow(2.0_f64, 10.0) - 1024.0).abs() < EPS);
+        assert!((hypot(3.0_f64, 4.0) - 5.0).abs() < EPS);
+    }
+
+    #[test]
+    fn ternary_host() {
+        assert!((fma(2.0_f64, 3.0, 1.0) - 7.0).abs() < EPS);
+        assert!((mad(2.0_f64, 3.0, 1.0) - 7.0).abs() < EPS);
+        assert_eq!(clamp(5.0_f64, 0.0, 1.0), 1.0);
+        assert_eq!(clamp(-1.0_f64, 0.0, 1.0), 0.0);
+        assert!((mix(0.0_f64, 10.0, 0.25) - 2.5).abs() < EPS);
+        assert!((smoothstep(0.0_f64, 1.0, 0.5) - 0.5).abs() < EPS);
+        // Ternary on a vector type should walk all three through the
+        // default `zip3_componentwise` impl.
+        let a = DVec3::new(2.0, 3.0, 4.0);
+        let b = DVec3::new(3.0, 4.0, 5.0);
+        let c = DVec3::new(1.0, 1.0, 1.0);
+        let r = fma(a, b, c);
+        assert_eq!(r, DVec3::new(7.0, 13.0, 21.0));
+    }
+
+    #[test]
+    fn integer_host() {
+        assert_eq!(s_abs(-5_i32), 5);
+        assert_eq!(s_min(2_i32, -3), -3);
+        assert_eq!(s_max(2_i32, -3), 2);
+        assert_eq!(u_min(2_u32, 7), 2);
+        assert_eq!(u_max(2_u32, 7), 7);
+        assert_eq!(s_clamp(15_i32, -10, 10), 10);
+        assert_eq!(s_clamp(-15_i32, -10, 10), -10);
+        assert_eq!(u_clamp(15_u32, 0, 10), 10);
+        assert_eq!(popcount(0b1010_1010_u32), 4);
+        assert_eq!(clz(1_u32), 31);
+        assert_eq!(ctz(0b1000_u32), 3);
+        // Vector forms.
+        assert_eq!(s_abs(IVec3::new(-1, 2, -3)), IVec3::new(1, 2, 3));
+    }
+
+    #[test]
+    fn geometric_host() {
+        let a = DVec3::new(1.0, 2.0, 3.0);
+        let b = DVec3::new(4.0, -5.0, 6.0);
+        assert!((length(a) - num_traits::Float::sqrt(14.0_f64)).abs() < EPS);
+        assert!((distance(a, b) - num_traits::Float::sqrt(9.0 + 49.0 + 9.0_f64)).abs() < EPS);
+        let n = normalize(a);
+        let n_len = length(n);
+        assert!((n_len - 1.0).abs() < EPS);
+        // cross of x̂ and ŷ should be ẑ.
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let y = Vec3::new(0.0, 1.0, 0.0);
+        let xy = cross(x, y);
+        assert_eq!(xy, Vec3::new(0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn vector_arithmetic_host() {
+        let a = DVec3::new(1.0, 2.0, 3.0);
+        let b = DVec3::new(4.0, 5.0, 6.0);
+        assert_eq!(add(a, b), DVec3::new(5.0, 7.0, 9.0));
+        assert_eq!(sub(a, b), DVec3::new(-3.0, -3.0, -3.0));
+        assert_eq!(mul(a, b), DVec3::new(4.0, 10.0, 18.0));
+        assert_eq!(div(b, a), DVec3::new(4.0, 2.5, 2.0));
+    }
+
+    #[test]
+    fn multi_output_host() {
+        let (frac, int) = fract(2.75_f64);
+        assert!((frac - 0.75).abs() < EPS);
+        assert_eq!(int, 2.0);
+
+        let (m, e) = modf(-2.75_f64);
+        assert!((m - -0.75).abs() < EPS);
+        assert_eq!(e, -2.0);
+
+        let (s, c) = sincos(0.0_f64);
+        assert_eq!(s, 0.0);
+        assert_eq!(c, 1.0);
+
+        let (mantissa, exp) = frexp(8.0_f64);
+        // 8.0 = 0.5 * 2^4
+        assert!((mantissa - 0.5).abs() < EPS);
+        assert_eq!(exp, 4);
+    }
+
+    #[test]
+    #[test]
+    fn libm_backed_unary_host() {
+        let e = erf(0.5_f64);
+        assert!((e - 0.5204998778).abs() < 1e-6);
+
+        let ec = erfc(0.5_f64);
+        assert!((ec - (1.0 - e)).abs() < EPS);
+
+        let lg = lgamma(4.0_f64);
+        // lgamma(4) = ln(3!) = ln(6)
+        assert!((lg - 6.0_f64.ln()).abs() < EPS);
+
+        let tg = tgamma(4.0_f64);
+        // tgamma(4) = 3! = 6
+        assert!((tg - 6.0).abs() < EPS);
+
+        // f32 variants
+        let e32 = erf(0.5_f32);
+        assert!((e32 - 0.5205).abs() < 1e-3);
+    }
+
+    #[test]
+    fn libm_backed_binary_host() {
+        assert_eq!(fdim(5.0_f64, 3.0), 2.0);
+        assert_eq!(fdim(3.0_f64, 5.0), 0.0);
+
+        let na = nextafter(1.0_f64, 2.0);
+        assert!(na > 1.0 && na < 1.0 + 1e-15);
+
+        let r = remainder(5.5_f64, 2.0);
+        // 5.5 / 2.0 = 2.75 → nearest int = 3 → remainder = 5.5 - 3*2.0 = -0.5
+        assert!((r - -0.5).abs() < EPS);
+    }
+
+    #[test]
+    fn ilogb_and_ldexp_host() {
+        assert_eq!(ilogb(8.0_f64), 3);
+        assert_eq!(ilogb(1.0_f32), 0);
+
+        assert_eq!(ldexp(1.0_f64, 3), 8.0);
+        assert_eq!(ldexp(0.5_f32, 4), 8.0);
+    }
+
+    #[test]
+    fn lgamma_r_and_remquo_host() {
+        let (val, sign) = lgamma_r(4.0_f64);
+        assert!((val - 6.0_f64.ln()).abs() < EPS);
+        assert_eq!(sign, 1);
+
+        let (rem, quo) = remquo(5.5_f64, 2.0);
+        assert!((rem - -0.5).abs() < EPS);
+        assert_eq!(quo & 0x7, 3); // low bits of quotient
+    }
+
+    #[test]
+    fn saturating_ops_host() {
+        assert_eq!(s_add_sat(i32::MAX, 1_i32), i32::MAX);
+        assert_eq!(s_add_sat(i32::MIN, -1_i32), i32::MIN);
+        assert_eq!(s_add_sat(5_i32, 3), 8);
+
+        assert_eq!(u_add_sat(u32::MAX, 1_u32), u32::MAX);
+        assert_eq!(u_add_sat(5_u32, 3), 8);
+
+        assert_eq!(s_sub_sat(i32::MIN, 1_i32), i32::MIN);
+        assert_eq!(s_sub_sat(5_i32, 3), 2);
+
+        assert_eq!(u_sub_sat(0_u32, 1), 0);
+        assert_eq!(u_sub_sat(5_u32, 3), 2);
+    }
+}

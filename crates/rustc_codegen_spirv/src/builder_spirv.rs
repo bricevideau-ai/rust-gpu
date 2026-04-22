@@ -473,6 +473,9 @@ fn validate_opencl_capability(cap: Capability, target: &SpirvTarget, tcx: TyCtxt
         | Capability::SampledBuffer
         | Capability::ImageBuffer => true,
 
+        // Optional capability (requires SPV_KHR_bit_instructions extension).
+        Capability::BitInstructions => true,
+
         // OpenCL 2.0+ capabilities (device-dependent).
         Capability::DeviceEnqueue
         | Capability::GenericPointer
@@ -624,6 +627,10 @@ impl<'tcx> BuilderSpirv<'tcx> {
         if self.enabled_capabilities.borrow_mut().insert(capability) {
             self.builder.borrow_mut().capability(capability);
         }
+    }
+
+    pub fn require_extension(&self, ext: &str) {
+        self.builder.borrow_mut().extension(ext);
     }
 
     /// See comment on `BuilderCursor`

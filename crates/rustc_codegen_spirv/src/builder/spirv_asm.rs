@@ -466,6 +466,17 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 return;
             }
 
+            Op::BitReverse => {
+                if self.builder.has_capability(Capability::Kernel) {
+                    self.builder.require_capability(Capability::BitInstructions);
+                    self.builder.require_extension("SPV_KHR_bit_instructions");
+                }
+                self.emit()
+                    .insert_into_block(dr::InsertPoint::End, inst)
+                    .unwrap();
+                return;
+            }
+
             op => {
                 // NOTE(eddyb) allowing the instruction to be added below avoids
                 // spurious "`noreturn` requires a terminator at the end" errors.

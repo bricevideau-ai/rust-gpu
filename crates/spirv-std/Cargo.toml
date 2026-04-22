@@ -24,6 +24,7 @@ libm = { workspace = true }
 [target.'cfg(not(target_arch = "spirv"))'.dependencies]
 num-traits = { workspace = true, default-features = true }
 glam = { workspace = true, default-features = true }
+libm = { workspace = true }
 
 [features]
 default = []

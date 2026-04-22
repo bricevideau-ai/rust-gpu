@@ -16,6 +16,7 @@ mod demote_to_helper_invocation_ext;
 mod derivative;
 mod group;
 mod mesh_shading;
+pub mod opencl_std;
 mod primitive;
 mod ray_tracing;
 mod subgroup;
