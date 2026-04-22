@@ -9,9 +9,9 @@ use crate::spirv_type::SpirvType;
 use rspirv::dr;
 use rspirv::grammar::{LogicalOperand, OperandKind, OperandQuantifier, reflect};
 use rspirv::spirv::{
-    CooperativeMatrixOperands, FPFastMathMode, FragmentShadingRate, FunctionControl,
-    GroupOperation, ImageOperands, KernelProfilingInfo, LoopControl, MemoryAccess, MemorySemantics,
-    Op, RayFlags, SelectionControl, StorageClass, Word,
+    Capability, CooperativeMatrixOperands, Dim, FPFastMathMode, FragmentShadingRate,
+    FunctionControl, GroupOperation, ImageOperands, KernelProfilingInfo, LoopControl, MemoryAccess,
+    MemorySemantics, Op, RayFlags, SelectionControl, StorageClass, Word,
 };
 use rustc_abi::{BackendRepr, Primitive};
 use rustc_ast::ast::{InlineAsmOptions, InlineAsmTemplatePiece};
@@ -428,6 +428,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 multisampled: inst.operands[4].unwrap_literal_bit32(),
                 sampled: inst.operands[5].unwrap_literal_bit32(),
                 image_format: inst.operands[6].unwrap_image_format(),
+                access_qualifier: inst.operands.get(7).map(|op| op.unwrap_access_qualifier()),
             }
             .def(self.span(), self),
             Op::TypeSampledImage => SpirvType::SampledImage {
@@ -452,6 +453,17 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                     self.emit_global()
                         .insert_types_global_values(dr::InsertPoint::End, inst);
                 }
+                return;
+            }
+
+            // `OpConstantSampler` is a module-scope constant (like other
+            // `OpConstant*`s), and uses the `LiteralSampler` capability —
+            // emit to globals and auto-add the capability so users don't
+            // have to remember it on every kernel that uses `const_sampler!`.
+            Op::ConstantSampler => {
+                self.builder.require_capability(Capability::LiteralSampler);
+                self.emit_global()
+                    .insert_types_global_values(dr::InsertPoint::End, inst);
                 return;
             }
 
@@ -584,6 +596,7 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
         if let Some(result_type) = instruction.result_type {
             id_to_type_map.insert(instruction.result_id.unwrap(), result_type);
         }
+        self.widen_image_coordinate_for_kernel(id_to_type_map, &mut instruction);
         self.insert_inst(id_map, defined_ids, asm_block, instruction);
         if let Some(OutRegister::Place(place)) = out_register {
             self.emit()
@@ -595,6 +608,114 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 )
                 .unwrap();
         }
+    }
+
+    /// `OpenCL`-specific fixup: widen a 3-component image `Coordinate` to a
+    /// 4-component one for `image3d_t` (`Dim3D`, non-arrayed) and
+    /// `image2d_array_t` (`Dim2D`, arrayed).
+    ///
+    /// The `OpenCL` SPIR-V environment spec ("Coordinate Format for Reading and
+    /// Writing Images") mandates a 4-component (`int4`/`float4`) Coordinate for
+    /// these two image types — the fourth component is ignored. `spirv-std`
+    /// emits a 3-component coordinate (correct for the Vulkan/Shader
+    /// environment, where the `ImageCoordinate<ThreeD, False>` /
+    /// `<TwoD, True>` bounds are `Vector<S, 3>`), so strict-conformant `OpenCL`
+    /// runtimes (e.g. pocl) fail to resolve the mangled builtin (they only ship
+    /// the `Dv4_` overloads). Lenient runtimes (rusticl, Intel) accept `Dv3_`.
+    ///
+    /// This is gated on the `Kernel` capability, so the Vulkan/Shader path and
+    /// every other image dimension are byte-identical to before. Keyed on
+    /// `(dim, arrayed)`, so the same fixup covers `OpImageWrite`, `OpImageRead`
+    /// and the sampled-read ops (`OpImageSample*`, `OpImageFetch`) uniformly.
+    fn widen_image_coordinate_for_kernel(
+        &mut self,
+        id_to_type_map: &FxHashMap<Word, Word>,
+        instruction: &mut dr::Instruction,
+    ) {
+        if !self.builder.is_kernel_mode() {
+            return;
+        }
+
+        // All coordinate-bearing image ops we care about place the image (or
+        // sampled-image) operand at index 0 and the `Coordinate` at index 1.
+        // `OpImageGather` is Shader-only (not Kernel-legal) and intentionally
+        // excluded.
+        match instruction.class.opcode {
+            Op::ImageWrite
+            | Op::ImageRead
+            | Op::ImageFetch
+            | Op::ImageSampleExplicitLod
+            | Op::ImageSampleImplicitLod => {}
+            _ => return,
+        }
+
+        if instruction.operands.len() < 2 {
+            return;
+        }
+
+        // Resolve the image operand's `SpirvType::Image`, unwrapping a
+        // `SampledImage` for the sampler-based reads.
+        let image_operand_id = instruction.operands[0].unwrap_id_ref();
+        let image_ty = match id_to_type_map.get(&image_operand_id) {
+            Some(&ty) => ty,
+            None => return,
+        };
+        let image_ty = match self.lookup_type(image_ty) {
+            SpirvType::Image { .. } => image_ty,
+            SpirvType::SampledImage { image_type } => image_type,
+            _ => return,
+        };
+        let (dim, arrayed) = match self.lookup_type(image_ty) {
+            SpirvType::Image { dim, arrayed, .. } => (dim, arrayed),
+            _ => return,
+        };
+
+        // Only `image3d_t` and `image2d_array_t` require the vec4 coordinate.
+        let needs_widening =
+            (dim == Dim::Dim3D && arrayed == 0) || (dim == Dim::Dim2D && arrayed != 0);
+        if !needs_widening {
+            return;
+        }
+
+        // Widen only if the coordinate is actually a 3-component vector.
+        let coord_id = instruction.operands[1].unwrap_id_ref();
+        let coord_ty = match id_to_type_map.get(&coord_id) {
+            Some(&ty) => ty,
+            None => return,
+        };
+        let element = match self.lookup_type(coord_ty) {
+            SpirvType::Vector {
+                element, count: 3, ..
+            } => element,
+            _ => return,
+        };
+
+        // Build the 4-component coordinate type.
+        let vec4_ty = SpirvType::simd_vector(self, self.span(), self.lookup_type(element), 4)
+            .def(self.span(), self);
+
+        // Widen the coordinate via `OpVectorShuffle`, matching what Clang emits
+        // for `(uintN)(v3, pad)`: shuffle the vec3 against a zero vec3, taking
+        // components [0, 1, 2] from the real coordinate and [3] from the zero
+        // vector (the spec-ignored fourth slot).
+        //
+        // We deliberately avoid the more obvious `OpCompositeConstruct %v4
+        // %vec3 %zero_scalar` (a vector constituent contributing its 3
+        // components plus a scalar for the 4th): although well-formed SPIR-V
+        // that passes `spirv-val`, the `SPIRV-LLVM-Translator` used by OpenCL
+        // runtimes (e.g. pocl) mislowers a vector constituent of
+        // `OpCompositeConstruct` into an invalid `insertelement <4 x i32>
+        // poison, <3 x i32> ..., i32 0` (inserting the whole vec3 as a single
+        // scalar element), failing the LLVM module verifier. Clang never emits
+        // that form (it uses `OpVectorShuffle`), so the translator bug stays
+        // latent for OpenCL-C but not for us — hence we follow its idiom.
+        // Upstream: KhronosGroup/SPIRV-LLVM-Translator#3860.
+        let zero_vec3 = self.constant_null(coord_ty).def(self);
+        let widened = self
+            .emit()
+            .vector_shuffle(vec4_ty, None, coord_id, zero_vec3, [0, 1, 2, 3])
+            .unwrap();
+        instruction.operands[1] = dr::Operand::IdRef(widened);
     }
 
     fn parse_operands<'a>(

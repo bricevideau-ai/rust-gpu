@@ -586,6 +586,22 @@ impl<'tcx> BuilderSpirv<'tcx> {
             .unwrap();
     }
 
+    /// Declare `capability` on the module if it is not already declared.
+    ///
+    /// Deduplicates against the module's own `OpCapability` list, so there is
+    /// no shadow state to keep in sync with what post-link passes may prune.
+    pub fn require_capability(&self, capability: Capability) {
+        let mut builder = self.builder.borrow_mut();
+        let already_declared = builder
+            .module_ref()
+            .capabilities
+            .iter()
+            .any(|inst| inst.operands[0].unwrap_capability() == capability);
+        if !already_declared {
+            builder.capability(capability);
+        }
+    }
+
     /// Whether codegen targets an `OpenCL` Kernel environment (as opposed to a
     /// Shader environment). Derived from the target's memory model, so it does
     /// not depend on which capabilities have been declared.

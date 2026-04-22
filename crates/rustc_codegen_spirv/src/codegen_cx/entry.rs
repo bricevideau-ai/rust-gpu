@@ -10,7 +10,7 @@ use crate::custom_decorations::{CustomDecoration, KernelParamPositionDecoration}
 use crate::spirv_type::SpirvType;
 use rspirv::dr::Operand;
 use rspirv::spirv::{
-    BuiltIn, Decoration, Dim, ExecutionModel, FunctionControl, StorageClass, Word,
+    BuiltIn, Capability, Decoration, Dim, ExecutionModel, FunctionControl, StorageClass, Word,
 };
 use rustc_abi::FieldsShape;
 use rustc_codegen_ssa::traits::{BaseTypeCodegenMethods, BuilderMethods, MiscCodegenMethods as _};
@@ -362,7 +362,9 @@ impl<'tcx> CodegenCx<'tcx> {
             let ref_is_read_only = read_only;
             let storage_class_requires_read_only =
                 expected_mutbl_for(storage_class) == hir::Mutability::Not;
-            if !ref_is_read_only && storage_class_requires_read_only {
+            let is_kernel_image = execution_model == ExecutionModel::Kernel
+                && matches!(element_ty, SpirvType::Image { .. });
+            if !ref_is_read_only && storage_class_requires_read_only && !is_kernel_image {
                 let mut err = self.tcx.dcx().struct_span_err(
                     hir_param.ty_span,
                     format!(
@@ -505,7 +507,136 @@ impl<'tcx> CodegenCx<'tcx> {
             hir_param,
             &attrs,
         );
-        let value_spirv_type = value_layout.spirv_type(hir_param.ty_span, self);
+        let mut value_spirv_type = value_layout.spirv_type(hir_param.ty_span, self);
+
+        // For Kernel entry points, set the OpTypeImage AccessQualifier per
+        // parameter. Resolution rules:
+        //
+        //   1. If the param carries an explicit
+        //      `#[spirv(image_access = "read_only"|"write_only"|"read_write")]`
+        //      attribute, that value wins. Coherence-checked against
+        //      Rust mutability: `read_only` requires `&Image`,
+        //      `write_only`/`read_write` require `&mut Image`. Incoherent
+        //      pairings are a hard error.
+        //   2. Otherwise, derive from Rust mutability:
+        //        - `&Image`     → ReadOnly. Always works on OpenCL 1.2+.
+        //        - `&mut Image` → ReadWrite. Requires the `ImageReadWrite`
+        //          capability (OpenCL 2.0+); auto-declared below when
+        //          emitted. Users targeting OpenCL 1.2 must use the
+        //          explicit `image_access = "write_only"` override.
+        //
+        // The Vulkan/Shader path bypasses this block entirely: SPIR-V's
+        // image AccessQualifier operand is OpenCL-Kernel-specific.
+        //
+        // Re-interns SpirvType::Image with the chosen qualifier so distinct
+        // OpTypeImage instances exist per access mode. Auto-adds
+        // `ImageBasic` (always for any kernel image param) and
+        // `ImageReadWrite` (only when ReadWrite is emitted) capabilities.
+        if execution_model == ExecutionModel::Kernel
+            && let SpirvType::Image {
+                sampled_type,
+                dim,
+                depth,
+                arrayed,
+                multisampled,
+                sampled,
+                image_format,
+                ..
+            } = self.lookup_type(value_spirv_type)
+        {
+            self.builder.require_capability(Capability::ImageBasic);
+
+            // Per the SPIR-V core spec, `OpTypeImage` operand `Dim`
+            // carries per-value capability requirements that
+            // `ImageBasic` alone does not satisfy:
+            //
+            //   Dim1D    → Sampled1D / Image1D
+            //   Dim2D    → (none — Kernel covers it)
+            //   Dim3D    → (none)
+            //   DimBuffer → SampledBuffer / ImageBuffer
+            //   DimCube/DimRect → Shader-only (not legal under Kernel)
+            //
+            // `Image1D` / `ImageBuffer` imply the matching `Sampled*`
+            // and cover both sampled-read and storage-image use, so
+            // we always declare the storage form for Kernel.
+            //
+            // Both are listed as allowed in OpenCL 1.2+ by
+            // `validate_opencl_capability`, so this auto-declare is
+            // env-spec safe.
+            match dim {
+                rspirv::spirv::Dim::Dim1D => {
+                    self.builder.require_capability(Capability::Image1D);
+                }
+                rspirv::spirv::Dim::DimBuffer => {
+                    self.builder.require_capability(Capability::ImageBuffer);
+                }
+                _ => {}
+            }
+
+            let explicit = attrs.image_access.as_ref().map(|s| s.value);
+            let access_qualifier = match explicit {
+                Some(rspirv::spirv::AccessQualifier::ReadOnly) => {
+                    if !read_only {
+                        self.tcx.dcx().span_err(
+                            hir_param.ty_span,
+                            "#[spirv(image_access = \"read_only\")] requires a `&Image` parameter, but this is `&mut Image`",
+                        );
+                    }
+                    rspirv::spirv::AccessQualifier::ReadOnly
+                }
+                Some(rspirv::spirv::AccessQualifier::WriteOnly) => {
+                    if read_only {
+                        self.tcx.dcx().span_err(
+                            hir_param.ty_span,
+                            "#[spirv(image_access = \"write_only\")] requires a `&mut Image` parameter, but this is `&Image`",
+                        );
+                    }
+                    rspirv::spirv::AccessQualifier::WriteOnly
+                }
+                Some(rspirv::spirv::AccessQualifier::ReadWrite) => {
+                    if read_only {
+                        self.tcx.dcx().span_err(
+                            hir_param.ty_span,
+                            "#[spirv(image_access = \"read_write\")] requires a `&mut Image` parameter, but this is `&Image`",
+                        );
+                    }
+                    // Will auto-declare ImageReadWrite below.
+                    rspirv::spirv::AccessQualifier::ReadWrite
+                }
+                None => {
+                    // No explicit override — derive from mutability.
+                    if read_only {
+                        rspirv::spirv::AccessQualifier::ReadOnly
+                    } else {
+                        rspirv::spirv::AccessQualifier::ReadWrite
+                    }
+                }
+            };
+
+            // Auto-declare `ImageReadWrite` whenever a `ReadWrite`
+            // OpTypeImage is emitted. The capability is restricted to
+            // OpenCL 2.0+ targets; if the user has selected an
+            // OpenCL 1.2 target env, `require_capability` →
+            // `validate_opencl_capability` will error with a clear
+            // message pointing the user at `image_access = "write_only"`
+            // (see the rule comment above) as the OpenCL-1.2-compatible
+            // alternative.
+            if access_qualifier == rspirv::spirv::AccessQualifier::ReadWrite {
+                self.builder.require_capability(Capability::ImageReadWrite);
+            }
+
+            value_spirv_type = SpirvType::Image {
+                sampled_type,
+                dim,
+                depth,
+                arrayed,
+                multisampled,
+                sampled,
+                image_format,
+                access_qualifier: Some(access_qualifier),
+            }
+            .def(hir_param.ty_span, self);
+        }
 
         let (var_id, spec_const_id) = match storage_class {
             // Pre-allocate the module-scoped `OpVariable` *Result* ID.
