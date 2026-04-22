@@ -927,6 +927,28 @@ fn trans_intrinsic_type<'tcx>(
             let sampled = const_int_value(cx, args.const_at(5))?;
             let image_format = const_int_value(cx, args.const_at(6))?;
 
+            // OpenCL SPIR-V environment requires:
+            // - Sampled Type must be OpTypeVoid
+            // - Depth must be 0 (not a depth image)
+            // - Sampled must be 0 (Unknown)
+            // - AccessQualifier must be present
+            // The qualifier varies per parameter (ReadOnly / WriteOnly /
+            // ReadWrite), determined in codegen_cx::entry from Rust mutability
+            // and capabilities by re-interning the Image type. The default set
+            // here is ReadOnly so the base OpTypeImage is valid SPIR-V even
+            // when no parameter ever references it.
+            let (sampled_type, depth, sampled, access_qualifier) =
+                if cx.builder.has_capability(rspirv::spirv::Capability::Kernel) {
+                    (
+                        SpirvType::Void.def(span, cx),
+                        0,
+                        0,
+                        Some(rspirv::spirv::AccessQualifier::ReadOnly),
+                    )
+                } else {
+                    (sampled_type, depth, sampled, None)
+                };
+
             let ty = SpirvType::Image {
                 sampled_type,
                 dim,
@@ -935,6 +957,7 @@ fn trans_intrinsic_type<'tcx>(
                 multisampled,
                 sampled,
                 image_format,
+                access_qualifier,
             };
             Ok(ty.def(span, cx))
         }

@@ -362,7 +362,9 @@ impl<'tcx> CodegenCx<'tcx> {
             let ref_is_read_only = read_only;
             let storage_class_requires_read_only =
                 expected_mutbl_for(storage_class) == hir::Mutability::Not;
-            if !ref_is_read_only && storage_class_requires_read_only {
+            let is_kernel_image = execution_model == ExecutionModel::Kernel
+                && matches!(element_ty, SpirvType::Image { .. });
+            if !ref_is_read_only && storage_class_requires_read_only && !is_kernel_image {
                 let mut err = self.tcx.dcx().struct_span_err(
                     hir_param.ty_span,
                     format!(
@@ -505,7 +507,53 @@ impl<'tcx> CodegenCx<'tcx> {
             hir_param,
             &attrs,
         );
-        let value_spirv_type = value_layout.spirv_type(hir_param.ty_span, self);
+        let mut value_spirv_type = value_layout.spirv_type(hir_param.ty_span, self);
+
+        // For Kernel entry points, set the OpTypeImage AccessQualifier per
+        // parameter based on Rust mutability and capabilities:
+        // - `&Image`         → ReadOnly
+        // - `&mut Image` and `ImageReadWrite` enabled (OpenCL 2.0+) → ReadWrite
+        // - `&mut Image` otherwise (OpenCL 1.2)                     → WriteOnly
+        // OpenCL 1.2 supports both read_only and write_only image kernel
+        // arguments — the same image object can be read in one kernel and
+        // written by another. Re-intern SpirvType::Image with the chosen
+        // qualifier so distinct OpTypeImage instances exist per access mode.
+        // Also auto-add ImageBasic capability.
+        if execution_model == ExecutionModel::Kernel
+            && let SpirvType::Image {
+                sampled_type,
+                dim,
+                depth,
+                arrayed,
+                multisampled,
+                sampled,
+                image_format,
+                ..
+            } = self.lookup_type(value_spirv_type)
+        {
+            self.builder.require_capability(Capability::ImageBasic);
+            let access_qualifier = if read_only {
+                rspirv::spirv::AccessQualifier::ReadOnly
+            } else if self
+                .builder
+                .has_capability(rspirv::spirv::Capability::ImageReadWrite)
+            {
+                rspirv::spirv::AccessQualifier::ReadWrite
+            } else {
+                rspirv::spirv::AccessQualifier::WriteOnly
+            };
+            value_spirv_type = SpirvType::Image {
+                sampled_type,
+                dim,
+                depth,
+                arrayed,
+                multisampled,
+                sampled,
+                image_format,
+                access_qualifier: Some(access_qualifier),
+            }
+            .def(hir_param.ty_span, self);
+        }
 
         let (var_id, spec_const_id) = match storage_class {
             // Pre-allocate the module-scoped `OpVariable` *Result* ID.
