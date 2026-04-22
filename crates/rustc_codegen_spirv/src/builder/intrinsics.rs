@@ -204,6 +204,38 @@ impl<'a, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                 ret_ty,
                 [args[0].immediate(), args[1].immediate()],
             ),
+            // `f32::min` / `f64::min` (Rust's IEEE-754 `minNum`-style,
+            // NaN-ignoring) are lowered by core to the
+            // `minimum_number_nsz_*` / `maximum_number_nsz_*` intrinsics.
+            // On Kernel targets we route these to `OpExtInst <OpenCL.std>
+            // fmin_common`/`fmax_common` (opcodes 98/97) — these have the
+            // exact NaN-ignoring semantics Rust expects, unlike the GLSL.std.450
+            // `FMin`/`FMax` which are NaN-undefined per spec. There's no
+            // `GLSL.std.450` equivalent (the closest is `FMin` itself, with
+            // the wrong NaN behaviour), so on Vulkan/Shader targets we fall
+            // through to the unintercepted inlined Rust source — accepting
+            // that lower-quality codegen is the right call when the
+            // alternative is silently wrong NaN handling.
+            sym::minimum_number_nsz_f32
+            | sym::minimum_number_nsz_f64
+            | sym::minimum_number_nsz_f128
+                if self
+                    .cx
+                    .builder
+                    .has_capability(rspirv::spirv::Capability::Kernel) =>
+            {
+                self.opencl_op(98, ret_ty, [args[0].immediate(), args[1].immediate()])
+            }
+            sym::maximum_number_nsz_f32
+            | sym::maximum_number_nsz_f64
+            | sym::maximum_number_nsz_f128
+                if self
+                    .cx
+                    .builder
+                    .has_capability(rspirv::spirv::Capability::Kernel) =>
+            {
+                self.opencl_op(97, ret_ty, [args[0].immediate(), args[1].immediate()])
+            }
             sym::copysignf32 | sym::copysignf64 | sym::copysignf128 => {
                 let val = args[0].immediate();
                 let sign = args[1].immediate();
