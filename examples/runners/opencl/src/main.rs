@@ -5,9 +5,13 @@ use opencl3::event::Event;
 use opencl3::kernel::{
     CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE, ExecuteKernel, Kernel, get_kernel_sub_group_info,
 };
-use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_READ_WRITE};
+use opencl3::memory::{
+    Buffer, CL_ADDRESS_CLAMP_TO_EDGE, CL_FILTER_LINEAR, CL_FLOAT, CL_MEM_OBJECT_IMAGE2D,
+    CL_MEM_READ_ONLY, CL_MEM_READ_WRITE, CL_MEM_WRITE_ONLY, CL_RGBA, CL_UNSIGNED_INT8, ClMem,
+    Image, Sampler,
+};
 use opencl3::program::Program;
-use opencl3::types::{CL_BLOCKING, cl_device_id};
+use opencl3::types::{CL_BLOCKING, CL_TRUE, cl_device_id, cl_image_desc, cl_image_format};
 use spirv_builder::{Capability, CompileResult, SpirvBuilder};
 use std::path::Path;
 use std::ptr;
@@ -906,6 +910,605 @@ fn run_workgroup_collective_tests(ocl: &OclContext) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+fn compile_kernel_image(path: &Path) -> Result<(Vec<u8>, Duration), Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    let result: CompileResult = SpirvBuilder::new(path, "spirv-unknown-opencl1.2")
+        .capability(Capability::ImageBasic)
+        .build()?;
+    let spv_path = result.module.unwrap_single();
+    let spv_bytes = std::fs::read(spv_path)?;
+    Ok((spv_bytes, start.elapsed()))
+}
+
+fn run_image_read_test(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::new(ocl.device_id);
+    let has_images = device.image_support().unwrap_or(false);
+    if !has_images {
+        println!("Skipped: device does not support images");
+        return Ok(());
+    }
+
+    let image_crate =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-image-shader");
+    let (spv_bytes, compile_time) = compile_kernel_image(&image_crate)?;
+    println!(
+        "Compiled image kernel ({} bytes, {compile_time:?})",
+        spv_bytes.len()
+    );
+    let program = ocl.build_program(&spv_bytes)?;
+    let kernel = Kernel::create(&program, "read_image_test")?;
+
+    let width: u32 = 4;
+    let height: u32 = 4;
+    let n = (width * height) as usize;
+
+    let mut pixels = vec![0u8; n * 4];
+    for y in 0..height {
+        for x in 0..width {
+            let i = ((y * width + x) as usize) * 4;
+            pixels[i] = (x * 60) as u8;
+            pixels[i + 1] = (y * 80) as u8;
+            pixels[i + 2] = (x + y) as u8;
+            pixels[i + 3] = 255;
+        }
+    }
+
+    let format = cl_image_format {
+        image_channel_order: CL_RGBA,
+        image_channel_data_type: CL_UNSIGNED_INT8,
+    };
+    let desc = cl_image_desc {
+        image_type: CL_MEM_OBJECT_IMAGE2D,
+        image_width: width as usize,
+        image_height: height as usize,
+        image_depth: 0,
+        image_array_size: 0,
+        image_row_pitch: 0,
+        image_slice_pitch: 0,
+        num_mip_levels: 0,
+        num_samples: 0,
+        buffer: ptr::null_mut(),
+    };
+
+    let mut image = unsafe {
+        Image::create(
+            &ocl.context,
+            CL_MEM_READ_ONLY,
+            &format,
+            &desc,
+            ptr::null_mut(),
+        )?
+    };
+
+    let origin = [0usize, 0, 0];
+    let region = [width as usize, height as usize, 1];
+    unsafe {
+        ocl.queue
+            .enqueue_write_image(
+                &mut image,
+                CL_BLOCKING,
+                origin.as_ptr(),
+                region.as_ptr(),
+                0,
+                0,
+                pixels.as_mut_ptr().cast(),
+                &[],
+            )?
+            .wait()?;
+    }
+
+    let output_buf = ocl.upload(&vec![0u32; n])?;
+
+    let cl_mem_handle = image.get();
+    let n_usize = n;
+    let mut exec = ExecuteKernel::new(&kernel);
+    unsafe {
+        exec.set_arg(&cl_mem_handle)
+            .set_arg(&output_buf.buffer)
+            .set_arg(&n_usize)
+            .set_arg(&width);
+    }
+    let event = unsafe {
+        exec.set_global_work_sizes(&[width as usize, height as usize])
+            .enqueue_nd_range(&ocl.queue)?
+    };
+    event.wait()?;
+
+    if let Some(d) = profiling_duration(&event) {
+        println!("Kernel:  {d:?} ({width}x{height})");
+    }
+
+    let mut output = vec![0u32; n];
+    ocl.download(&output_buf, &mut output)?;
+
+    let mut ok = true;
+    for y in 0..height {
+        for x in 0..width {
+            let i = (y * width + x) as usize;
+            let r = x * 60;
+            let g = y * 80;
+            let b = x + y;
+            let a = 255u32;
+            let expected = r | (g << 8) | (b << 16) | (a << 24);
+            if output[i] != expected {
+                eprintln!(
+                    "FAIL pixel ({x},{y}): got 0x{:08x}, expected 0x{expected:08x}",
+                    output[i]
+                );
+                ok = false;
+            }
+        }
+    }
+    if ok {
+        println!("Verify:  {n} pixels read correctly");
+    }
+
+    Ok(())
+}
+
+fn compile_kernel_sampler(path: &Path) -> Result<(Vec<u8>, Duration), Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    let result: CompileResult = SpirvBuilder::new(path, "spirv-unknown-opencl1.2")
+        .capability(Capability::LiteralSampler)
+        .build()?;
+    let spv_path = result.module.unwrap_single();
+    let spv_bytes = std::fs::read(spv_path)?;
+    Ok((spv_bytes, start.elapsed()))
+}
+
+fn run_sampler_upscale_test(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::new(ocl.device_id);
+    let has_images = device.image_support().unwrap_or(false);
+    if !has_images {
+        println!("Skipped: device does not support images");
+        return Ok(());
+    }
+
+    let kernel_crate =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-sampler-shader");
+    let (spv_bytes, compile_time) = compile_kernel_sampler(&kernel_crate)?;
+    println!(
+        "Compiled sampler kernel ({} bytes, {compile_time:?})",
+        spv_bytes.len()
+    );
+
+    let program = ocl.build_program(&spv_bytes)?;
+    let kernel = Kernel::create(&program, "upscale_2d")?;
+
+    // Source: 4x4 RGBA float with corner colors red/green/blue/white,
+    // edges filled by linear interpolation between corners.
+    let src_w: u32 = 4;
+    let src_h: u32 = 4;
+    let mut src_pixels = vec![0.0f32; (src_w * src_h) as usize * 4];
+    let red = [1.0f32, 0.0, 0.0, 1.0];
+    let green = [0.0f32, 1.0, 0.0, 1.0];
+    let blue = [0.0f32, 0.0, 1.0, 1.0];
+    let white = [1.0f32, 1.0, 1.0, 1.0];
+    for y in 0..src_h {
+        for x in 0..src_w {
+            let fx = x as f32 / (src_w - 1) as f32;
+            let fy = y as f32 / (src_h - 1) as f32;
+            let i = ((y * src_w + x) as usize) * 4;
+            // Bilinear over the four corners.
+            for c in 0..4 {
+                let top = red[c] * (1.0 - fx) + green[c] * fx;
+                let bot = blue[c] * (1.0 - fx) + white[c] * fx;
+                src_pixels[i + c] = top * (1.0 - fy) + bot * fy;
+            }
+        }
+    }
+
+    let format = cl_image_format {
+        image_channel_order: CL_RGBA,
+        image_channel_data_type: CL_FLOAT,
+    };
+    let src_desc = cl_image_desc {
+        image_type: CL_MEM_OBJECT_IMAGE2D,
+        image_width: src_w as usize,
+        image_height: src_h as usize,
+        image_depth: 0,
+        image_array_size: 0,
+        image_row_pitch: 0,
+        image_slice_pitch: 0,
+        num_mip_levels: 0,
+        num_samples: 0,
+        buffer: ptr::null_mut(),
+    };
+    let mut src_image = unsafe {
+        Image::create(
+            &ocl.context,
+            CL_MEM_READ_ONLY,
+            &format,
+            &src_desc,
+            ptr::null_mut(),
+        )?
+    };
+    let origin = [0usize, 0, 0];
+    let src_region = [src_w as usize, src_h as usize, 1];
+    unsafe {
+        ocl.queue
+            .enqueue_write_image(
+                &mut src_image,
+                CL_BLOCKING,
+                origin.as_ptr(),
+                src_region.as_ptr(),
+                0,
+                0,
+                src_pixels.as_mut_ptr().cast(),
+                &[],
+            )?
+            .wait()?;
+    }
+
+    // Destination: 16x16 RGBA float storage image.
+    let dst_w: u32 = 16;
+    let dst_h: u32 = 16;
+    let dst_desc = cl_image_desc {
+        image_type: CL_MEM_OBJECT_IMAGE2D,
+        image_width: dst_w as usize,
+        image_height: dst_h as usize,
+        image_depth: 0,
+        image_array_size: 0,
+        image_row_pitch: 0,
+        image_slice_pitch: 0,
+        num_mip_levels: 0,
+        num_samples: 0,
+        buffer: ptr::null_mut(),
+    };
+    let dst_image = unsafe {
+        Image::create(
+            &ocl.context,
+            CL_MEM_WRITE_ONLY,
+            &format,
+            &dst_desc,
+            ptr::null_mut(),
+        )?
+    };
+
+    // Sampler: normalised coords + linear filter + clamp-to-edge.
+    let sampler = Sampler::create(
+        &ocl.context,
+        CL_TRUE,
+        CL_ADDRESS_CLAMP_TO_EDGE,
+        CL_FILTER_LINEAR,
+    )?;
+
+    let src_handle = src_image.get();
+    let sampler_handle = sampler.get();
+    let dst_handle = dst_image.get();
+    let mut exec = ExecuteKernel::new(&kernel);
+    unsafe {
+        exec.set_arg(&src_handle)
+            .set_arg(&sampler_handle)
+            .set_arg(&dst_handle)
+            .set_arg(&dst_w)
+            .set_arg(&dst_h);
+    }
+    let event = unsafe {
+        exec.set_global_work_sizes(&[dst_w as usize, dst_h as usize])
+            .enqueue_nd_range(&ocl.queue)?
+    };
+    event.wait()?;
+
+    if let Some(d) = profiling_duration(&event) {
+        println!("Kernel:  {d:?} ({src_w}x{src_h} -> {dst_w}x{dst_h})");
+    }
+
+    let mut dst_pixels = vec![0.0f32; (dst_w * dst_h) as usize * 4];
+    let dst_region = [dst_w as usize, dst_h as usize, 1];
+    unsafe {
+        ocl.queue
+            .enqueue_read_image(
+                &dst_image,
+                CL_BLOCKING,
+                origin.as_ptr(),
+                dst_region.as_ptr(),
+                0,
+                0,
+                dst_pixels.as_mut_ptr().cast(),
+                &[],
+            )?
+            .wait()?;
+    }
+
+    // Verify: with normalised-coord clamp + linear filter, sampling
+    // `(0.5/dst_w, 0.5/dst_h)` returns (within filter precision) the
+    // top-left corner of the source — i.e. red. The same for the
+    // other three corners. Allow a small tolerance because pocl's
+    // bilinear filter uses limited-precision intermediate weights.
+    let tol = 0.05f32;
+    let mut max_err = 0.0f32;
+    let mut ok = true;
+    let check = |dst: &[f32], dx: u32, dy: u32, expected: [f32; 4]| -> (bool, f32) {
+        let i = ((dy * dst_w + dx) as usize) * 4;
+        let mut max = 0.0f32;
+        for c in 0..4 {
+            let err = (dst[i + c] - expected[c]).abs();
+            if err > max {
+                max = err;
+            }
+        }
+        (max <= tol, max)
+    };
+
+    for &(name, dx, dy, expected) in &[
+        ("top-left (red)", 0u32, 0u32, red),
+        ("top-right (green)", dst_w - 1, 0, green),
+        ("bottom-left (blue)", 0, dst_h - 1, blue),
+        ("bottom-right (white)", dst_w - 1, dst_h - 1, white),
+    ] {
+        let (pass, err) = check(&dst_pixels, dx, dy, expected);
+        max_err = max_err.max(err);
+        if !pass {
+            let i = ((dy * dst_w + dx) as usize) * 4;
+            eprintln!(
+                "FAIL {name} at ({dx},{dy}): got [{:.3},{:.3},{:.3},{:.3}], expected [{:.3},{:.3},{:.3},{:.3}], max err {err:.3}",
+                dst_pixels[i],
+                dst_pixels[i + 1],
+                dst_pixels[i + 2],
+                dst_pixels[i + 3],
+                expected[0],
+                expected[1],
+                expected[2],
+                expected[3],
+            );
+            ok = false;
+        }
+    }
+
+    // Centre pixel: bilinear midpoint of the four corners = mean.
+    let cx = dst_w / 2;
+    let cy = dst_h / 2;
+    let mid = [
+        0.25 * (red[0] + green[0] + blue[0] + white[0]),
+        0.25 * (red[1] + green[1] + blue[1] + white[1]),
+        0.25 * (red[2] + green[2] + blue[2] + white[2]),
+        0.25 * (red[3] + green[3] + blue[3] + white[3]),
+    ];
+    let (pass, err) = check(&dst_pixels, cx, cy, mid);
+    max_err = max_err.max(err);
+    if !pass {
+        let i = ((cy * dst_w + cx) as usize) * 4;
+        eprintln!(
+            "FAIL centre ({cx},{cy}): got [{:.3},{:.3},{:.3},{:.3}], expected [{:.3},{:.3},{:.3},{:.3}], max err {err:.3}",
+            dst_pixels[i],
+            dst_pixels[i + 1],
+            dst_pixels[i + 2],
+            dst_pixels[i + 3],
+            mid[0],
+            mid[1],
+            mid[2],
+            mid[3],
+        );
+        ok = false;
+    }
+
+    if ok {
+        println!("Verify:  4 corners + centre match (max err {max_err:.4}, tol {tol})");
+    }
+
+    Ok(())
+}
+
+/// Same upscale as `run_sampler_upscale_test`, but the kernel uses
+/// `OpConstantSampler` (via `const_sampler!`) instead of taking a sampler
+/// argument. Verifies the constant-sampler path produces the same output.
+fn run_const_sampler_upscale_test(ocl: &OclContext) -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::new(ocl.device_id);
+    let has_images = device.image_support().unwrap_or(false);
+    if !has_images {
+        println!("Skipped: device does not support images");
+        return Ok(());
+    }
+
+    let kernel_crate =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders/kernel-sampler-shader");
+    let (spv_bytes, compile_time) = compile_kernel_sampler(&kernel_crate)?;
+    println!(
+        "Compiled sampler kernel ({} bytes, {compile_time:?})",
+        spv_bytes.len()
+    );
+
+    let program = ocl.build_program(&spv_bytes)?;
+    let kernel = Kernel::create(&program, "upscale_2d_const_sampler")?;
+
+    let src_w: u32 = 4;
+    let src_h: u32 = 4;
+    let mut src_pixels = vec![0.0f32; (src_w * src_h) as usize * 4];
+    let red = [1.0f32, 0.0, 0.0, 1.0];
+    let green = [0.0f32, 1.0, 0.0, 1.0];
+    let blue = [0.0f32, 0.0, 1.0, 1.0];
+    let white = [1.0f32, 1.0, 1.0, 1.0];
+    for y in 0..src_h {
+        for x in 0..src_w {
+            let fx = x as f32 / (src_w - 1) as f32;
+            let fy = y as f32 / (src_h - 1) as f32;
+            let i = ((y * src_w + x) as usize) * 4;
+            for c in 0..4 {
+                let top = red[c] * (1.0 - fx) + green[c] * fx;
+                let bot = blue[c] * (1.0 - fx) + white[c] * fx;
+                src_pixels[i + c] = top * (1.0 - fy) + bot * fy;
+            }
+        }
+    }
+
+    let format = cl_image_format {
+        image_channel_order: CL_RGBA,
+        image_channel_data_type: CL_FLOAT,
+    };
+    let src_desc = cl_image_desc {
+        image_type: CL_MEM_OBJECT_IMAGE2D,
+        image_width: src_w as usize,
+        image_height: src_h as usize,
+        image_depth: 0,
+        image_array_size: 0,
+        image_row_pitch: 0,
+        image_slice_pitch: 0,
+        num_mip_levels: 0,
+        num_samples: 0,
+        buffer: ptr::null_mut(),
+    };
+    let mut src_image = unsafe {
+        Image::create(
+            &ocl.context,
+            CL_MEM_READ_ONLY,
+            &format,
+            &src_desc,
+            ptr::null_mut(),
+        )?
+    };
+    let origin = [0usize, 0, 0];
+    let src_region = [src_w as usize, src_h as usize, 1];
+    unsafe {
+        ocl.queue
+            .enqueue_write_image(
+                &mut src_image,
+                CL_BLOCKING,
+                origin.as_ptr(),
+                src_region.as_ptr(),
+                0,
+                0,
+                src_pixels.as_mut_ptr().cast(),
+                &[],
+            )?
+            .wait()?;
+    }
+
+    let dst_w: u32 = 16;
+    let dst_h: u32 = 16;
+    let dst_desc = cl_image_desc {
+        image_type: CL_MEM_OBJECT_IMAGE2D,
+        image_width: dst_w as usize,
+        image_height: dst_h as usize,
+        image_depth: 0,
+        image_array_size: 0,
+        image_row_pitch: 0,
+        image_slice_pitch: 0,
+        num_mip_levels: 0,
+        num_samples: 0,
+        buffer: ptr::null_mut(),
+    };
+    let dst_image = unsafe {
+        Image::create(
+            &ocl.context,
+            CL_MEM_WRITE_ONLY,
+            &format,
+            &dst_desc,
+            ptr::null_mut(),
+        )?
+    };
+
+    let src_handle = src_image.get();
+    let dst_handle = dst_image.get();
+    // No sampler kernel arg — the kernel uses an `OpConstantSampler` baked
+    // into the SPIR-V module.
+    let mut exec = ExecuteKernel::new(&kernel);
+    unsafe {
+        exec.set_arg(&src_handle)
+            .set_arg(&dst_handle)
+            .set_arg(&dst_w)
+            .set_arg(&dst_h);
+    }
+    let event = unsafe {
+        exec.set_global_work_sizes(&[dst_w as usize, dst_h as usize])
+            .enqueue_nd_range(&ocl.queue)?
+    };
+    event.wait()?;
+
+    if let Some(d) = profiling_duration(&event) {
+        println!("Kernel:  {d:?} ({src_w}x{src_h} -> {dst_w}x{dst_h})");
+    }
+
+    let mut dst_pixels = vec![0.0f32; (dst_w * dst_h) as usize * 4];
+    let dst_region = [dst_w as usize, dst_h as usize, 1];
+    unsafe {
+        ocl.queue
+            .enqueue_read_image(
+                &dst_image,
+                CL_BLOCKING,
+                origin.as_ptr(),
+                dst_region.as_ptr(),
+                0,
+                0,
+                dst_pixels.as_mut_ptr().cast(),
+                &[],
+            )?
+            .wait()?;
+    }
+
+    let tol = 0.05f32;
+    let mut max_err = 0.0f32;
+    let mut ok = true;
+    let check = |dst: &[f32], dx: u32, dy: u32, expected: [f32; 4]| -> (bool, f32) {
+        let i = ((dy * dst_w + dx) as usize) * 4;
+        let mut max = 0.0f32;
+        for c in 0..4 {
+            let err = (dst[i + c] - expected[c]).abs();
+            if err > max {
+                max = err;
+            }
+        }
+        (max <= tol, max)
+    };
+
+    for &(name, dx, dy, expected) in &[
+        ("top-left (red)", 0u32, 0u32, red),
+        ("top-right (green)", dst_w - 1, 0, green),
+        ("bottom-left (blue)", 0, dst_h - 1, blue),
+        ("bottom-right (white)", dst_w - 1, dst_h - 1, white),
+    ] {
+        let (pass, err) = check(&dst_pixels, dx, dy, expected);
+        max_err = max_err.max(err);
+        if !pass {
+            let i = ((dy * dst_w + dx) as usize) * 4;
+            eprintln!(
+                "FAIL {name} at ({dx},{dy}): got [{:.3},{:.3},{:.3},{:.3}], expected [{:.3},{:.3},{:.3},{:.3}], max err {err:.3}",
+                dst_pixels[i],
+                dst_pixels[i + 1],
+                dst_pixels[i + 2],
+                dst_pixels[i + 3],
+                expected[0],
+                expected[1],
+                expected[2],
+                expected[3],
+            );
+            ok = false;
+        }
+    }
+
+    let cx = dst_w / 2;
+    let cy = dst_h / 2;
+    let mid = [
+        0.25 * (red[0] + green[0] + blue[0] + white[0]),
+        0.25 * (red[1] + green[1] + blue[1] + white[1]),
+        0.25 * (red[2] + green[2] + blue[2] + white[2]),
+        0.25 * (red[3] + green[3] + blue[3] + white[3]),
+    ];
+    let (pass, err) = check(&dst_pixels, cx, cy, mid);
+    max_err = max_err.max(err);
+    if !pass {
+        let i = ((cy * dst_w + cx) as usize) * 4;
+        eprintln!(
+            "FAIL centre ({cx},{cy}): got [{:.3},{:.3},{:.3},{:.3}], expected [{:.3},{:.3},{:.3},{:.3}], max err {err:.3}",
+            dst_pixels[i],
+            dst_pixels[i + 1],
+            dst_pixels[i + 2],
+            dst_pixels[i + 3],
+            mid[0],
+            mid[1],
+            mid[2],
+            mid[3],
+        );
+        ok = false;
+    }
+
+    if ok {
+        println!("Verify:  4 corners + centre match (max err {max_err:.4}, tol {tol})");
+    }
+
+    Ok(())
+}
+
 // ── Main ───────────────────────────────────────────────────────────────
 
 /// Run a named test section, catching and reporting any errors.
@@ -971,6 +1574,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if !section("Work-group collective tests", || {
         run_workgroup_collective_tests(&ocl)
+    }) {
+        errors += 1;
+    }
+    if !section("Image read test", || run_image_read_test(&ocl)) {
+        errors += 1;
+    }
+    if !section("Sampler upscale test", || run_sampler_upscale_test(&ocl)) {
+        errors += 1;
+    }
+    if !section("Const-sampler upscale test", || {
+        run_const_sampler_upscale_test(&ocl)
     }) {
         errors += 1;
     }

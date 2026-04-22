@@ -1050,6 +1050,72 @@ impl<
         }
         result
     }
+
+    /// Query the channel data type of the image.
+    ///
+    /// **Kernel-only** — the `OpImageQueryFormat` instruction
+    /// requires the SPIR-V `Kernel` capability per the core spec.
+    /// Calling this from a Vulkan/Shader kernel emits SPIR-V that
+    /// `spirv-val` rejects with "instruction requires Kernel
+    /// capability". The SPIR-V grammar imposes no per-`Dim`/`MS`/
+    /// `Sampled` restriction, so no trait gate is added here.
+    ///
+    /// The returned `u32` matches the `OpenCL` SPIR-V environment
+    /// spec's "Image Channel Data Type Mapping" table — e.g. `2` →
+    /// `UnormInt8` / `CL_UNORM_INT8`, `10` → `UnsignedInt8` /
+    /// `CL_UNSIGNED_INT8`, `14` → `Float` / `CL_FLOAT`.
+    ///
+    /// Mainly useful for kernels that want to specialise behaviour
+    /// per actual host storage format — `OpenCL` Kernel images carry
+    /// only sampled-type information at compile time
+    /// (`OpTypeImage` `Image Format` is always `Unknown`), so the
+    /// concrete channel data type is only available at runtime via
+    /// this query.
+    #[crate::macros::gpu_only]
+    #[doc(alias = "OpImageQueryFormat")]
+    #[inline]
+    pub fn query_format(&self) -> u32 {
+        let mut result = 0u32;
+        unsafe {
+            asm! {
+                "%image = OpLoad _ {this}",
+                "%result = OpImageQueryFormat typeof*{result} %image",
+                "OpStore {result} %result",
+                this = in(reg) self,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
+
+    /// Query the channel order of the image.
+    ///
+    /// **Kernel-only** — see [`query_format`](Self::query_format)
+    /// for the capability + validation discussion.
+    ///
+    /// The returned `u32` matches the `OpenCL` SPIR-V environment
+    /// spec's "Image Channel Order Mapping" table — e.g. `0` → `R` /
+    /// `CL_R`, `5` → `RGBA` / `CL_RGBA`, `13` → `Depth` / `CL_DEPTH`.
+    ///
+    /// Companion to [`query_format`](Self::query_format) — together
+    /// they identify the host storage `cl_image_format` at runtime
+    /// without pinning it at kernel compile time.
+    #[crate::macros::gpu_only]
+    #[doc(alias = "OpImageQueryOrder")]
+    #[inline]
+    pub fn query_order(&self) -> u32 {
+        let mut result = 0u32;
+        unsafe {
+            asm! {
+                "%image = OpLoad _ {this}",
+                "%result = OpImageQueryOrder typeof*{result} %image",
+                "OpStore {result} %result",
+                this = in(reg) self,
+                result = in(reg) &mut result,
+            }
+        }
+        result
+    }
 }
 
 impl<

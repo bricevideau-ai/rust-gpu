@@ -17,6 +17,8 @@ members = [
     "examples/shaders/kernel-shader",
     "examples/shaders/kernel-fp64-shader",
     "examples/shaders/kernel-test-shader",
+    "examples/shaders/kernel-image-shader",
+    "examples/shaders/kernel-sampler-shader",
     "examples/runners/opencl-builder",
     "examples/runners/opencl",
     "examples/shaders/mouse-shader",
