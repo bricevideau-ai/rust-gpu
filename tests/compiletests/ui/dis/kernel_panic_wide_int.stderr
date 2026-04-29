@@ -1,0 +1,16 @@
+OpCapability Addresses
+OpCapability Kernel
+OpCapability Vector16
+OpCapability Float16Buffer
+OpCapability Int64
+%1 = OpExtInstImport "NonSemantic.DebugPrintf"
+OpMemoryModel Physical64 OpenCL
+OpEntryPoint Kernel %2 "main"
+%3 = OpString "/n[Rust panicked at $DIR/kernel_panic_wide_int.rs:24:9]/n got u64 zero: %lu/n      in main()/n"
+%4 = OpString "$DIR/kernel_panic_wide_int.rs"
+OpName %5 "value"
+%6 = OpTypeVoid
+%7 = OpTypeInt 64 0
+%8 = OpTypeFunction %6 %7
+%9 = OpTypeBool
+%10 = OpConstant  %7  0
