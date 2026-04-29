@@ -244,14 +244,304 @@ fn entry_points(module: &rspirv::dr::Module) -> Vec<String> {
         .collect()
 }
 
+/// For Kernel entry points using the `debug-printf` abort strategy, convert
+/// `NonSemantic.DebugPrintf` instructions into `OpenCL.std printf` calls
+/// (opcode 184) with byte-array format strings in `UniformConstant` storage.
+/// The abort block's `OpReturn` terminator is left unchanged.
+fn kernel_debug_printf_to_opencl(module: &mut Module) {
+    use rspirv::dr::{Instruction, Operand};
+    use rspirv::spirv::{Capability, ExecutionModel, Op, StorageClass, Word};
+    use std::collections::{HashMap, HashSet};
+
+    let has_kernel = module
+        .entry_points
+        .iter()
+        .any(|ep| ep.operands[0].unwrap_execution_model() == ExecutionModel::Kernel);
+    if !has_kernel {
+        return;
+    }
+
+    let debug_printf_ext_id = module
+        .ext_inst_imports
+        .iter()
+        .find(|inst| {
+            inst.class.opcode == Op::ExtInstImport
+                && inst.operands[0].unwrap_literal_string() == "NonSemantic.DebugPrintf"
+        })
+        .and_then(|inst| inst.result_id);
+    let Some(debug_printf_ext_id) = debug_printf_ext_id else {
+        return;
+    };
+
+    let header = module.header.as_mut().unwrap();
+    let mut next_id = || {
+        let id = header.bound;
+        header.bound += 1;
+        id
+    };
+
+    // --- Basic types ---
+
+    let u32_ty = module
+        .types_global_values
+        .iter()
+        .find(|inst| {
+            inst.class.opcode == Op::TypeInt
+                && inst.operands[0].unwrap_literal_bit32() == 32
+                && inst.operands[1].unwrap_literal_bit32() == 0
+        })
+        .and_then(|inst| inst.result_id)
+        .unwrap_or_else(|| {
+            let id = next_id();
+            module.types_global_values.push(Instruction::new(
+                Op::TypeInt,
+                None,
+                Some(id),
+                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
+            ));
+            id
+        });
+
+    let u8_ty = module
+        .types_global_values
+        .iter()
+        .find(|inst| {
+            inst.class.opcode == Op::TypeInt
+                && inst.operands[0].unwrap_literal_bit32() == 8
+                && inst.operands[1].unwrap_literal_bit32() == 0
+        })
+        .and_then(|inst| inst.result_id)
+        .unwrap_or_else(|| {
+            let id = next_id();
+            module.types_global_values.push(Instruction::new(
+                Op::TypeInt,
+                None,
+                Some(id),
+                vec![Operand::LiteralBit32(8), Operand::LiteralBit32(0)],
+            ));
+            id
+        });
+
+    let has_int8 = module.capabilities.iter().any(|inst| {
+        inst.class.opcode == Op::Capability
+            && inst.operands[0].unwrap_capability() == Capability::Int8
+    });
+    if !has_int8 {
+        module.capabilities.push(Instruction::new(
+            Op::Capability,
+            None,
+            None,
+            vec![Operand::Capability(Capability::Int8)],
+        ));
+    }
+
+    // --- OpenCL.std ext inst import ---
+
+    let opencl_ext_id = module
+        .ext_inst_imports
+        .iter()
+        .find(|inst| {
+            inst.class.opcode == Op::ExtInstImport
+                && inst.operands[0].unwrap_literal_string() == "OpenCL.std"
+        })
+        .and_then(|inst| inst.result_id)
+        .unwrap_or_else(|| {
+            let id = next_id();
+            module.ext_inst_imports.push(Instruction::new(
+                Op::ExtInstImport,
+                None,
+                Some(id),
+                vec![Operand::LiteralString("OpenCL.std".to_string())],
+            ));
+            id
+        });
+
+    // --- Collect Kernel function IDs ---
+
+    let kernel_func_ids: Vec<Word> = module
+        .entry_points
+        .iter()
+        .filter(|ep| ep.operands[0].unwrap_execution_model() == ExecutionModel::Kernel)
+        .map(|ep| ep.operands[1].unwrap_id_ref())
+        .collect();
+
+    // --- Pre-collect format strings from DebugPrintf in Kernel functions ---
+
+    let mut string_ids: HashSet<Word> = HashSet::new();
+    for func in &module.functions {
+        let func_id = func.def.as_ref().and_then(|d| d.result_id).unwrap_or(0);
+        if !kernel_func_ids.contains(&func_id) {
+            continue;
+        }
+        for block in &func.blocks {
+            for inst in &block.instructions {
+                if inst.class.opcode == Op::ExtInst
+                    && inst.operands.len() > 2
+                    && inst.operands[0].unwrap_id_ref() == debug_printf_ext_id
+                {
+                    string_ids.insert(inst.operands[2].unwrap_id_ref());
+                }
+            }
+        }
+    }
+
+    // --- Create byte-array variables in UniformConstant for each format string ---
+
+    let mut string_to_var: HashMap<Word, Word> = HashMap::new();
+    let mut byte_const_cache: HashMap<u8, Word> = HashMap::new();
+
+    for &string_id in &string_ids {
+        let string_content = module
+            .debug_string_source
+            .iter()
+            .find(|inst| inst.class.opcode == Op::String && inst.result_id == Some(string_id))
+            .map(|inst| inst.operands[0].unwrap_literal_string().to_string())
+            .unwrap();
+
+        let bytes: Vec<u8> = string_content.bytes().chain(std::iter::once(0)).collect();
+        let len = bytes.len();
+
+        for &b in &bytes {
+            byte_const_cache.entry(b).or_insert_with(|| {
+                let id = next_id();
+                module.types_global_values.push(Instruction::new(
+                    Op::Constant,
+                    Some(u8_ty),
+                    Some(id),
+                    vec![Operand::LiteralBit32(u32::from(b))],
+                ));
+                id
+            });
+        }
+
+        let len_const_id = next_id();
+        module.types_global_values.push(Instruction::new(
+            Op::Constant,
+            Some(u32_ty),
+            Some(len_const_id),
+            vec![Operand::LiteralBit32(len as u32)],
+        ));
+
+        let arr_ty = next_id();
+        module.types_global_values.push(Instruction::new(
+            Op::TypeArray,
+            None,
+            Some(arr_ty),
+            vec![Operand::IdRef(u8_ty), Operand::IdRef(len_const_id)],
+        ));
+
+        let composite_id = next_id();
+        let byte_operands: Vec<Operand> = bytes
+            .iter()
+            .map(|&b| Operand::IdRef(byte_const_cache[&b]))
+            .collect();
+        module.types_global_values.push(Instruction::new(
+            Op::ConstantComposite,
+            Some(arr_ty),
+            Some(composite_id),
+            byte_operands,
+        ));
+
+        let ptr_uc_arr = next_id();
+        module.types_global_values.push(Instruction::new(
+            Op::TypePointer,
+            None,
+            Some(ptr_uc_arr),
+            vec![
+                Operand::StorageClass(StorageClass::UniformConstant),
+                Operand::IdRef(arr_ty),
+            ],
+        ));
+
+        let var_id = next_id();
+        module.types_global_values.push(Instruction::new(
+            Op::Variable,
+            Some(ptr_uc_arr),
+            Some(var_id),
+            vec![
+                Operand::StorageClass(StorageClass::UniformConstant),
+                Operand::IdRef(composite_id),
+            ],
+        ));
+
+        string_to_var.insert(string_id, var_id);
+    }
+
+    // --- Convert DebugPrintf → OpenCL.std printf in Kernel functions ---
+
+    for func in &mut module.functions {
+        let func_id = func.def.as_ref().and_then(|d| d.result_id).unwrap_or(0);
+        if !kernel_func_ids.contains(&func_id) {
+            continue;
+        }
+
+        for block in &mut func.blocks {
+            for inst in &mut block.instructions {
+                if inst.class.opcode == Op::ExtInst
+                    && !inst.operands.is_empty()
+                    && inst.operands[0].unwrap_id_ref() == debug_printf_ext_id
+                {
+                    inst.operands[0] = Operand::IdRef(opencl_ext_id);
+                    inst.operands[1] = Operand::LiteralExtInstInteger(184);
+                    let string_id = inst.operands[2].unwrap_id_ref();
+                    inst.operands[2] = Operand::IdRef(string_to_var[&string_id]);
+                    inst.result_type = Some(u32_ty);
+                    if inst.result_id.is_none() {
+                        inst.result_id = Some(next_id());
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Cleanup ---
+
+    let consumed_string_ids: HashSet<Word> = string_to_var.keys().copied().collect();
+    module.debug_string_source.retain(|inst| {
+        inst.class.opcode != Op::String
+            || !inst
+                .result_id
+                .is_some_and(|id| consumed_string_ids.contains(&id))
+    });
+
+    let still_referenced = module.functions.iter().any(|func| {
+        func.blocks.iter().any(|block| {
+            block.instructions.iter().any(|inst| {
+                inst.class.opcode == Op::ExtInst
+                    && !inst.operands.is_empty()
+                    && inst.operands[0].unwrap_id_ref() == debug_printf_ext_id
+            })
+        })
+    });
+    if !still_referenced {
+        module
+            .ext_inst_imports
+            .retain(|inst| inst.result_id != Some(debug_printf_ext_id));
+
+        let has_non_semantic = module.ext_inst_imports.iter().any(|inst| {
+            inst.class.opcode == Op::ExtInstImport
+                && inst.operands[0]
+                    .unwrap_literal_string()
+                    .starts_with("NonSemantic.")
+        });
+        if !has_non_semantic {
+            module.extensions.retain(|inst| {
+                inst.class.opcode != Op::Extension
+                    || inst.operands[0].unwrap_literal_string() != "SPV_KHR_non_semantic_info"
+            });
+        }
+    }
+}
+
 fn post_link_single_module(
     sess: &Session,
     cg_args: &CodegenArgs,
-    module: Module,
+    mut module: Module,
     out_filename: &Path,
     dump_prefix: Option<&OsStr>,
 ) {
     cg_args.do_disassemble(&module);
+    kernel_debug_printf_to_opencl(&mut module);
     let spv_binary = module.assemble();
 
     if let Some(dir) = &cg_args.dump_post_link {
