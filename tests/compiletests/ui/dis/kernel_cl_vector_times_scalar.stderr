@@ -1,0 +1,17 @@
+%1 = OpFunction  %2  None %3
+%4 = OpFunctionParameter  %5
+%6 = OpFunctionParameter  %7
+%8 = OpFunctionParameter  %5
+%9 = OpFunctionParameter  %5
+%10 = OpLabel
+%12 = OpLoad  %13  %4
+%14 = OpLoad  %15  %6
+%17 = OpVectorTimesScalar  %13  %12 %14
+OpStore %8 %17
+%18 = OpLoad  %15  %6
+%19 = OpLoad  %13  %4
+%20 = OpVectorTimesScalar  %13  %19 %18
+OpStore %9 %20
+OpNoLine
+OpReturn
+OpFunctionEnd

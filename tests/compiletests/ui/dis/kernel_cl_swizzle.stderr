@@ -1,0 +1,19 @@
+%1 = OpFunction  %2  None %3
+%4 = OpFunctionParameter  %5
+%6 = OpFunctionParameter  %7
+%8 = OpFunctionParameter  %9
+%10 = OpFunctionParameter  %11
+%12 = OpFunctionParameter  %5
+%13 = OpLabel
+%15 = OpLoad  %16  %4
+%17 = OpCompositeExtract  %18  %15 2
+OpStore %8 %17
+%19 = OpLoad  %16  %4
+%20 = OpVectorShuffle  %21  %19 %19 1 0
+OpStore %10 %20
+%22 = OpLoad  %23  %6
+%24 = OpVectorShuffle  %16  %22 %22 7 6 5 4
+OpStore %12 %24
+OpNoLine
+OpReturn
+OpFunctionEnd
