@@ -1516,18 +1516,20 @@ pub fn sincos<F: Float + Default>(value: F) -> (F, F) {
 #[cfg(all(test, not(target_arch = "spirv")))]
 mod tests {
     use super::*;
+    use crate::cl::Double3;
     use crate::glam::{DVec3, IVec3, Vec3};
 
     const EPS: f64 = 1e-12;
 
-    // The `cl::*` types arrive in a later commit; tests that exercise them
-    // through `opencl_std` live alongside their definitions.
-
     #[test]
-    fn dot_glam_host() {
-        let a = DVec3::new(1.0, 2.0, 3.0);
-        let b = DVec3::new(4.0, -5.0, 6.0);
-        assert_eq!(dot(a, b), 4.0 - 10.0 + 18.0);
+    fn dot_glam_and_cl_match() {
+        let a_glam = DVec3::new(1.0, 2.0, 3.0);
+        let b_glam = DVec3::new(4.0, -5.0, 6.0);
+        let a_cl = Double3::from_array([1.0, 2.0, 3.0]);
+        let b_cl = Double3::from_array([4.0, -5.0, 6.0]);
+        let expected = 4.0 - 10.0 + 18.0;
+        assert_eq!(dot(a_glam, b_glam), expected);
+        assert_eq!(dot(a_cl, b_cl), expected);
     }
 
     #[test]
@@ -1550,6 +1552,16 @@ mod tests {
         assert!((r.x - 0.5).abs() < EPS);
         assert!((r.y - 0.25).abs() < EPS);
         assert!((r.z - 2.0).abs() < EPS);
+
+        // The same operation should also work on the matching `cl::*` type
+        // — `cl::Double3` is an `OpenCL` `double3` (32-byte aligned, 24
+        // bytes of payload + trailing pad) whose `Componentwise` impl
+        // is provided in this commit.
+        let v_cl = Double3::from_array([4.0, 16.0, 0.25]);
+        let r_cl = rsqrt(v_cl).to_array();
+        assert!((r_cl[0] - 0.5).abs() < EPS);
+        assert!((r_cl[1] - 0.25).abs() < EPS);
+        assert!((r_cl[2] - 2.0).abs() < EPS);
     }
 
     #[test]
@@ -1609,6 +1621,11 @@ mod tests {
         let y = Vec3::new(0.0, 1.0, 0.0);
         let xy = cross(x, y);
         assert_eq!(xy, Vec3::new(0.0, 0.0, 1.0));
+        // Same for `cl::Double3`.
+        let xc = Double3::from_array([1.0, 0.0, 0.0]);
+        let yc = Double3::from_array([0.0, 1.0, 0.0]);
+        let xyc = cross(xc, yc).to_array();
+        assert_eq!(xyc, [0.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -1639,5 +1656,80 @@ mod tests {
         // 8.0 = 0.5 * 2^4
         assert!((mantissa - 0.5).abs() < EPS);
         assert_eq!(exp, 4);
+    }
+
+    #[test]
+    fn cl_method_forms_match_free_functions() {
+        // Glam-style method forms on `cl::*` types must produce
+        // identical results to the matching `ocl::*` free functions —
+        // they're the same call, just different syntax.
+        use crate::cl::{Double3, Float3, Int3, UInt3};
+
+        let a = Float3::new(1.0, 2.0, 3.0);
+        let b = Float3::new(4.0, -5.0, 6.0);
+        assert_eq!(a.dot(b), dot(a, b));
+        assert_eq!(a.length(), length(a));
+        assert_eq!(a.length_squared(), dot(a, a));
+        assert_eq!(a.distance(b), distance(a, b));
+        // `normalize` uses sqrt — go via approximate compare.
+        let n_method = a.normalize().to_array();
+        let n_free = normalize(a).to_array();
+        for i in 0..3 {
+            assert!((n_method[i] - n_free[i]).abs() < 1e-6);
+        }
+
+        // Componentwise unary.
+        assert_eq!(a.abs(), fabs(a));
+        assert_eq!(a.floor(), floor(a));
+        assert_eq!(a.sqrt(), sqrt(a));
+
+        // Binary.
+        assert_eq!(a.min(b), fmin(a, b));
+        assert_eq!(a.max(b), fmax(a, b));
+        assert_eq!(a.powf(2.0), pow(a, Float3::splat(2.0)));
+
+        // Ternary.
+        let lo = Float3::splat(0.0);
+        let hi = Float3::splat(2.0);
+        assert_eq!(a.clamp(lo, hi), clamp(a, lo, hi));
+        assert_eq!(a.lerp(b, 0.25), mix(a, b, Float3::splat(0.25)));
+        assert_eq!(a.mix(b, 0.25), a.lerp(b, 0.25));
+        assert_eq!(a.mul_add(b, lo), fma(a, b, lo));
+
+        // Cross — only widths 3/4.
+        let x = Float3::new(1.0, 0.0, 0.0);
+        let y = Float3::new(0.0, 1.0, 0.0);
+        assert_eq!(x.cross(y), cross(x, y));
+
+        // Recip = 1/self via OpFDiv (NOT native_recip).
+        let eps_f32 = 1e-6_f32;
+        let r = a.recip().to_array();
+        assert!((r[0] - 1.0).abs() < eps_f32);
+        assert!((r[1] - 0.5).abs() < eps_f32);
+        assert!((r[2] - 1.0_f32 / 3.0).abs() < eps_f32);
+
+        // Double3 sanity.
+        let da = Double3::new(3.0, 4.0, 0.0);
+        assert!((da.length() - 5.0).abs() < EPS);
+
+        // Integer methods: signed.
+        let i = Int3::new(-3, 5, 7);
+        let j = Int3::new(2, 2, 2);
+        assert_eq!(i.abs(), s_abs(i));
+        assert_eq!(i.min(j), s_min(i, j));
+        assert_eq!(i.max(j), s_max(i, j));
+        let lo = Int3::splat(0);
+        let hi = Int3::splat(10);
+        assert_eq!(i.clamp(lo, hi), s_clamp(i, lo, hi));
+
+        // Integer methods: unsigned.
+        let u = UInt3::new(3, 5, 7);
+        let v = UInt3::new(2, 8, 4);
+        assert_eq!(u.min(v), u_min(u, v));
+        assert_eq!(u.max(v), u_max(u, v));
+        let lo = UInt3::splat(0);
+        let hi = UInt3::splat(10);
+        assert_eq!(u.clamp(lo, hi), u_clamp(u, lo, hi));
+        assert_eq!(u.count_ones(), popcount(u));
     }
 }

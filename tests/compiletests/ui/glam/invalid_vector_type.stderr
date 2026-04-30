@@ -1,17 +1,17 @@
 error: `#[spirv(vector)]` must have 2, 3 or 4 members
-  --> $DIR/invalid_vector_type.rs:8:1
+  --> $DIR/invalid_vector_type.rs:10:1
    |
 LL | pub struct FewerFields {
    | ^^^^^^^^^^^^^^^^^^^^^^
 
 error: `#[spirv(vector)]` must have 2, 3 or 4 members
-  --> $DIR/invalid_vector_type.rs:13:1
+  --> $DIR/invalid_vector_type.rs:15:1
    |
 LL | pub struct TooManyFields {
    | ^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: `#[spirv(vector)]` type fields must all be floats, integers or bools
-  --> $DIR/invalid_vector_type.rs:22:1
+  --> $DIR/invalid_vector_type.rs:24:1
    |
 LL | pub struct NotVectorField {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -19,7 +19,7 @@ LL | pub struct NotVectorField {
    = note: field type is f32x2
 
 error: `#[spirv(vector)]` member types must all be the same
-  --> $DIR/invalid_vector_type.rs:34:1
+  --> $DIR/invalid_vector_type.rs:36:1
    |
 LL | pub struct DifferentTypes {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^
