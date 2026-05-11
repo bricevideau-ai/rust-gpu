@@ -8,6 +8,10 @@ pub struct BufferConfig {
     pub size: u64,
     pub usage: BufferUsage,
     pub initial_data: Option<Vec<u8>>,
+    /// Size in bytes of one element. Used by `OpenCL` to compute the element
+    /// count passed as the slice-length kernel argument (`size / element_size`).
+    /// Vulkan backends ignore this (they use `OpArrayLength`).
+    pub element_size: usize,
 }
 
 impl BufferConfig {
@@ -16,6 +20,16 @@ impl BufferConfig {
             size: size as u64,
             usage: BufferUsage::Storage,
             initial_data: None,
+            element_size: 1,
+        }
+    }
+
+    pub fn writeback_typed<A: bytemuck::NoUninit>(count: usize) -> Self {
+        Self {
+            size: (count * std::mem::size_of::<A>()) as u64,
+            usage: BufferUsage::Storage,
+            initial_data: None,
+            element_size: std::mem::size_of::<A>(),
         }
     }
 
@@ -25,6 +39,7 @@ impl BufferConfig {
             size: vec.len() as u64,
             usage: BufferUsage::StorageReadOnly,
             initial_data: Some(vec),
+            element_size: std::mem::size_of::<A>(),
         }
     }
 }

@@ -471,10 +471,8 @@ fn validate_opencl_capability(cap: Capability, target: &SpirvTarget, tcx: TyCtxt
         | Capability::Sampled1D
         | Capability::Image1D
         | Capability::SampledBuffer
-        | Capability::ImageBuffer => true,
-
-        // Optional capability (requires SPV_KHR_bit_instructions extension).
-        Capability::BitInstructions => true,
+        | Capability::ImageBuffer
+        | Capability::BitInstructions => true,
 
         // OpenCL 2.0+ capabilities (device-dependent).
         Capability::DeviceEnqueue

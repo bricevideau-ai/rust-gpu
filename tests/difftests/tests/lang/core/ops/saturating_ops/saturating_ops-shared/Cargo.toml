@@ -1,0 +1,9 @@
+[package]
+name = "saturating_ops-shared"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+spirv-std.workspace = true
