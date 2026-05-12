@@ -1,0 +1,12 @@
+[package]
+name = "opencl_std_math_vec-cpu"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+difftest.workspace = true
+bytemuck.workspace = true
+spirv-std = { workspace = true, features = [] }
+opencl_std_math_vec-shared = { path = "../opencl_std_math_vec-shared" }
