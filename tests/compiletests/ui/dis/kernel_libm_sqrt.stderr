@@ -1,0 +1,15 @@
+               OpCapability Addresses
+               OpCapability Kernel
+               OpCapability Vector16
+               OpCapability Float16Buffer
+          %1 = OpExtInstImport "OpenCL.std"
+               OpMemoryModel Physical64 OpenCL
+               OpEntryPoint Kernel %2 "main"
+          %3 =           %4 =                               OpName %x "x"
+               OpName %e "e"
+               OpName %out_sqrt "out_sqrt"
+               OpName %out_pow "out_pow"
+       %void = OpTypeVoid
+        %f32 = OpTypeFloat 32
+%_ptr_CrossWorkgroup_f32 = OpTypePointer CrossWorkgroup %f32
+         %12 = OpTypeFunction %void %_ptr_CrossWorkgroup_f32 %_ptr_CrossWorkgroup_f32 %_ptr_CrossWorkgroup_f32 %_ptr_CrossWorkgroup_f32

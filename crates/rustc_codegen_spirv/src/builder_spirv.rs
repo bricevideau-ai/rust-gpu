@@ -475,7 +475,8 @@ fn validate_opencl_capability(cap: Capability, target: &SpirvTarget, tcx: TyCtxt
         | Capability::Sampled1D
         | Capability::Image1D
         | Capability::SampledBuffer
-        | Capability::ImageBuffer => true,
+        | Capability::ImageBuffer
+        | Capability::BitInstructions => true,
 
         // OpenCL 2.0+ capabilities (device-dependent).
         Capability::DeviceEnqueue
@@ -600,6 +601,10 @@ impl<'tcx> BuilderSpirv<'tcx> {
         if !already_declared {
             builder.capability(capability);
         }
+    }
+
+    pub fn require_extension(&self, ext: &str) {
+        self.builder.borrow_mut().extension(ext);
     }
 
     /// Whether codegen targets an `OpenCL` Kernel environment (as opposed to a
