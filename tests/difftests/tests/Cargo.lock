@@ -2810,6 +2810,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "workgroup_memory-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "workgroup_memory-rust"
 version = "0.0.0"
 dependencies = [

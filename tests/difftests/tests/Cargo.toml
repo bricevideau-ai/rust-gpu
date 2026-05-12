@@ -11,6 +11,7 @@ members = [
     "arch/workgroup_memory/workgroup_memory-rust",
     "arch/workgroup_memory/workgroup_memory-wgsl",
     "arch/workgroup_memory/workgroup_memory-ash",
+    "arch/workgroup_memory/workgroup_memory-opencl",
     "arch/memory_barriers/memory_barriers-rust",
     "arch/memory_barriers/memory_barriers-wgsl",
     "arch/memory_barriers/memory_barriers-opencl",
