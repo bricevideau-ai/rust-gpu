@@ -29,6 +29,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "abi-vector-layout-opencl-c"
+version = "0.0.0"
+dependencies = [
+ "abi-vector-layout-opencl-cpu",
+ "anyhow",
+ "bytemuck",
+ "difftest",
+ "opencl3",
+]
+
+[[package]]
+name = "abi-vector-layout-opencl-cpu"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "glam",
+ "spirv-std",
+]
+
+[[package]]
+name = "abi-vector-layout-opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "abi-vector-layout-opencl-cpu",
+ "bytemuck",
+ "difftest",
+ "glam",
+ "spirv-std",
+]
+
+[[package]]
 name = "abi-vector-layout-rust-gpu"
 version = "0.0.0"
 dependencies = [
