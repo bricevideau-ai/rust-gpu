@@ -1125,7 +1125,9 @@ fn trans_intrinsic_type<'tcx>(
         IntrinsicType::Matrix => {
             let span = span_for_spirv_type_adt(cx, ty).unwrap();
             let err_attr_name = "`#[spirv(matrix)]`";
-            let (element, count) = trans_glam_like_struct(cx, span, ty, args, err_attr_name)?;
+            // SPIR-V `OpTypeMatrix` allows column counts 2, 3, and 4 only.
+            let (element, count) =
+                trans_glam_like_struct(cx, span, ty, args, err_attr_name, &[2, 3, 4])?;
             match cx.lookup_type(element) {
                 SpirvType::Vector { .. } => (),
                 ty => {
@@ -1145,7 +1147,16 @@ fn trans_intrinsic_type<'tcx>(
         IntrinsicType::Vector => {
             let span = span_for_spirv_type_adt(cx, ty).unwrap();
             let err_attr_name = "`#[spirv(vector)]`";
-            let (element, count) = trans_glam_like_struct(cx, span, ty, args, err_attr_name)?;
+            // SPIR-V `OpTypeVector` allows component counts 2, 3, 4, 8, and 16.
+            // Counts 8 and 16 require the `Vector16` capability, which is
+            // auto-enabled on Kernel targets — Vulkan/shader targets stay at 4.
+            let allowed: &[u32] = if cx.builder.has_capability(rspirv::spirv::Capability::Kernel) {
+                &[2, 3, 4, 8, 16]
+            } else {
+                &[2, 3, 4]
+            };
+            let (element, count) =
+                trans_glam_like_struct(cx, span, ty, args, err_attr_name, allowed)?;
             match cx.lookup_type(element) {
                 SpirvType::Bool | SpirvType::Float { .. } | SpirvType::Integer { .. } => (),
                 ty => {
@@ -1173,6 +1184,23 @@ fn trans_intrinsic_type<'tcx>(
     }
 }
 
+/// Formats `[2, 3, 4]` as `"2, 3 or 4"` and `[2, 3, 4, 8, 16]` as
+/// `"2, 3, 4, 8 or 16"` for diagnostic messages.
+fn format_allowed_counts(counts: &[u32]) -> String {
+    match counts {
+        [] => String::new(),
+        [single] => single.to_string(),
+        [head @ .., last] => {
+            let head = head
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{head} or {last}")
+        }
+    }
+}
+
 /// A struct with multiple fields of the same kind.
 /// Used for `#[spirv(vector)]` and `#[spirv(matrix)]`.
 fn trans_glam_like_struct<'tcx>(
@@ -1181,6 +1209,7 @@ fn trans_glam_like_struct<'tcx>(
     ty: TyAndLayout<'tcx>,
     args: GenericArgsRef<'tcx>,
     err_attr_name: &str,
+    allowed_counts: &[u32],
 ) -> Result<(Word, u32), ErrorGuaranteed> {
     let tcx = cx.tcx;
     if let Some(adt) = ty.ty.ty_adt_def()
@@ -1204,10 +1233,11 @@ fn trans_glam_like_struct<'tcx>(
         let element_word = element.spirv_type(span, cx);
         let count = u32::try_from(count)
             .ok()
-            .filter(|count| 2 <= *count && *count <= 4)
+            .filter(|c| allowed_counts.contains(c))
             .ok_or_else(|| {
+                let allowed = format_allowed_counts(allowed_counts);
                 tcx.dcx()
-                    .span_err(span, format!("{err_attr_name} must have 2, 3 or 4 members"))
+                    .span_err(span, format!("{err_attr_name} must have {allowed} members"))
             })?;
 
         for i in 0..ty.fields.count() {

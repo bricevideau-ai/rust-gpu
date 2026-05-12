@@ -29,6 +29,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "abi-vector-layout-opencl-c"
+version = "0.0.0"
+dependencies = [
+ "abi-vector-layout-opencl-cpu",
+ "anyhow",
+ "bytemuck",
+ "difftest",
+ "opencl3",
+]
+
+[[package]]
+name = "abi-vector-layout-opencl-cpu"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "glam",
+ "spirv-std",
+]
+
+[[package]]
+name = "abi-vector-layout-opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "abi-vector-layout-opencl-cpu",
+ "bytemuck",
+ "difftest",
+ "glam",
+ "spirv-std",
+]
+
+[[package]]
 name = "abi-vector-layout-rust-gpu"
 version = "0.0.0"
 dependencies = [
@@ -1660,6 +1692,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencl_std_math_f64_vec-cpu"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_f64_vec-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64_vec-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_f64_vec-shared",
+ "spirv-builder",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64_vec-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_vec-cpu"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_vec-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_vec-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_vec-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_vec-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
 name = "ordered-float"
 version = "2.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2020,6 +2107,47 @@ dependencies = [
 
 [[package]]
 name = "saturating_ops-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
+name = "saturating_ops_vec-cpu-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops_vec-shared",
+]
+
+[[package]]
+name = "saturating_ops_vec-cpu-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops_vec-shared",
+]
+
+[[package]]
+name = "saturating_ops_vec-opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops_vec-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "saturating_ops_vec-opencl-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops_vec-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "saturating_ops_vec-shared"
 version = "0.0.0"
 dependencies = [
  "spirv-std",
