@@ -1283,6 +1283,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "math_ops_opencl-cpu-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl-shared",
+]
+
+[[package]]
+name = "math_ops_opencl-cpu-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl-shared",
+]
+
+[[package]]
+name = "math_ops_opencl-opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "math_ops_opencl-opencl-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "math_ops_opencl-shared"
+version = "0.0.0"
+dependencies = [
+ "num-traits",
+ "spirv-std",
+]
+
+[[package]]
 name = "matrix_ops-rust"
 version = "0.0.0"
 dependencies = [
