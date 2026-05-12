@@ -1658,6 +1658,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencl_std_math_f64_vec-cpu"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_f64_vec-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64_vec-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_f64_vec-shared",
+ "spirv-builder",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64_vec-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
 name = "opencl_std_math_vec-cpu"
 version = "0.0.0"
 dependencies = [

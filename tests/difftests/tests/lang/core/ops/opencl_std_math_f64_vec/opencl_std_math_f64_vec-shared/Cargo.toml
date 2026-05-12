@@ -1,0 +1,9 @@
+[package]
+name = "opencl_std_math_f64_vec-shared"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+spirv-std.workspace = true
