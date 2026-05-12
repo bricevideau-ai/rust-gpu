@@ -60,6 +60,7 @@ members = [
     "lang/core/intrinsics/black_box_noop/without-black-box",
     "lang/core/intrinsics/trailing_zeros_64/trailing_zeros_64-rust",
     "lang/core/intrinsics/trailing_zeros_64/trailing_zeros_64-cpu",
+    "lang/core/intrinsics/trailing_zeros_64/trailing_zeros_64-opencl",
 ]
 
 [workspace.package]

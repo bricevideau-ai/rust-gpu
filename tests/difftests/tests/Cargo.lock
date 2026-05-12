@@ -2317,6 +2317,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailing_zeros_64-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "trailing_zeros_64-rust"
 version = "0.0.0"
 dependencies = [
