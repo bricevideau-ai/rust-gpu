@@ -1630,6 +1630,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencl_std_math_f64-cpu"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_f64-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_f64-shared",
+ "spirv-builder",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
 name = "ordered-float"
 version = "2.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
