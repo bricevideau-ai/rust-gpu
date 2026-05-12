@@ -108,6 +108,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d67af77d68a931ecd5cbd8a3b5987d63a1d1d1278f7f6a60ae33db485cdebb69"
 
 [[package]]
+name = "array_access-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "array_access-rust"
 version = "0.0.0"
 dependencies = [
