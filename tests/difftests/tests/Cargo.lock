@@ -2773,6 +2773,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vector_swizzle-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "glam",
+ "spirv-std",
+]
+
+[[package]]
 name = "vector_swizzle-rust"
 version = "0.0.0"
 dependencies = [
