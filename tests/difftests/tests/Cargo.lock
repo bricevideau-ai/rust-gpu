@@ -1282,6 +1282,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 
 [[package]]
+name = "memory_barriers-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "memory_barriers-rust"
 version = "0.0.0"
 dependencies = [
@@ -2988,6 +2997,15 @@ dependencies = [
 
 [[package]]
 name = "workgroup_memory-ash"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
+name = "workgroup_memory-opencl"
 version = "0.0.0"
 dependencies = [
  "bytemuck",
