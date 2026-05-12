@@ -34,6 +34,7 @@ members = [
     "lang/control_flow/control_flow-opencl",
     "lang/control_flow_complex/control_flow_complex-rust",
     "lang/control_flow_complex/control_flow_complex-wgsl",
+    "lang/control_flow_complex/control_flow_complex-opencl",
     "lang/core/ops/math_ops/math_ops-rust",
     "lang/core/ops/math_ops/math_ops-wgsl",
     "lang/core/ops/vector_ops/vector_ops-rust",

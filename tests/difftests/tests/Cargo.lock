@@ -475,6 +475,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "control_flow_complex-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "control_flow_complex-rust"
 version = "0.0.0"
 dependencies = [
