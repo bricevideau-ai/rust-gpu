@@ -13,6 +13,7 @@ members = [
     "arch/workgroup_memory/workgroup_memory-ash",
     "arch/memory_barriers/memory_barriers-rust",
     "arch/memory_barriers/memory_barriers-wgsl",
+    "arch/memory_barriers/memory_barriers-opencl",
     "arch/vector_extract_insert/vector_extract_insert-rust",
     "arch/vector_extract_insert/vector_extract_insert-wgsl",
     "arch/push_constants/push_constants-rust",
