@@ -1,0 +1,15 @@
+[package]
+name = "abi-vector-layout-opencl-opencl"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+abi-vector-layout-opencl-cpu = { path = "../cpu" }
+spirv-std.workspace = true
+glam.workspace = true
+
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+difftest.workspace = true
+bytemuck.workspace = true

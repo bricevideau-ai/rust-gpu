@@ -70,6 +70,7 @@
 // #![allow()]
 #![doc = include_str!("../README.md")]
 
+mod cl_swizzle;
 mod debug_printf;
 mod image;
 mod opencl_printf;
@@ -363,4 +364,25 @@ pub fn derive_scalar_or_vector_composite(item: TokenStream) -> TokenStream {
     scalar_or_vector_composite::derive(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// `OpenCL`-spec swizzle for `spirv_std::cl::*` vector types.
+///
+/// Two forms after the source expression:
+///
+/// ```ignore
+/// use spirv_std::cl::{Float4, s};
+/// let v: Float4 = /* ... */;
+/// let _: Float2 = s!(v, xy);     // letter form: x|y|z|w, widths 1-4
+/// let _: f32    = s!(v, x);      // single index returns the scalar
+/// let _: Float4 = s!(v, sFEDC);  // sN form: hex digits 0-9a-f, all widths
+/// let _: Float4 = s!(v, s0_1_0_1); // underscores ignored
+/// ```
+///
+/// Result widths must be in `{1, 2, 3, 4, 8, 16}`. Letter form indices
+/// must be in `{0, 1, 2, 3}`; sN-form indices may be any hex digit but
+/// must be < the source vector's width (validated at SPIR-V time).
+#[proc_macro]
+pub fn cl_swizzle(input: TokenStream) -> TokenStream {
+    cl_swizzle::cl_swizzle_inner(syn::parse_macro_input!(input as cl_swizzle::SwizzleInput))
 }

@@ -1,0 +1,26 @@
+error: invalid swizzle component `q` in letter form; expected `x`, `y`, `z`, or `w`. For widths above 4, use the `sN` form (e.g. `s0123`).
+  --> $DIR/swizzle_invalid.rs:18:20
+   |
+LL |     let _ = s!(*v, xyq);
+   |                    ^^^
+
+error: invalid swizzle index `g` in `sN` form; expected hex digit 0-9 or a-f.
+  --> $DIR/swizzle_invalid.rs:20:20
+   |
+LL |     let _ = s!(*v, sgg);
+   |                    ^^^
+
+error: swizzle result width 5 is not a valid OpenCL/SPIR-V vector width; expected one of 1, 2, 3, 4, 8, or 16
+  --> $DIR/swizzle_invalid.rs:22:20
+   |
+LL |     let _ = s!(*v, xyzwx);
+   |                    ^^^^^
+
+error: invalid swizzle component `s` in letter form; expected `x`, `y`, `z`, or `w`. For widths above 4, use the `sN` form (e.g. `s0123`).
+  --> $DIR/swizzle_invalid.rs:24:20
+   |
+LL |     let _ = s!(*v, s);
+   |                    ^
+
+error: aborting due to 4 previous errors
+
