@@ -4,8 +4,10 @@ members = [
     "lib",
     "simple-compute/simple-compute-rust",
     "simple-compute/simple-compute-wgsl",
+    "simple-compute/simple-compute-opencl",
     "arch/atomic_ops/atomic_ops-rust",
     "arch/atomic_ops/atomic_ops-wgsl",
+    "arch/atomic_ops/atomic_ops-opencl",
     "arch/workgroup_memory/workgroup_memory-rust",
     "arch/workgroup_memory/workgroup_memory-wgsl",
     "arch/workgroup_memory/workgroup_memory-ash",
@@ -13,10 +15,12 @@ members = [
     "arch/memory_barriers/memory_barriers-wgsl",
     "arch/vector_extract_insert/vector_extract_insert-rust",
     "arch/vector_extract_insert/vector_extract_insert-wgsl",
+    "arch/vector_extract_insert/vector_extract_insert-opencl",
     "arch/push_constants/push_constants-rust",
     "arch/push_constants/push_constants-wgsl",
     "storage_class/array_access/array_access-rust",
     "storage_class/array_access/array_access-wgsl",
+    "storage_class/array_access/array_access-opencl",
     "lang/abi/vector_layout/cpu",
     "lang/abi/vector_layout/rust-gpu",
     "lang/abi/vector_layout_cuda/cpu",
@@ -25,8 +29,10 @@ members = [
     "lang/abi/vector_layout_scalar_math/rust-gpu",
     "lang/control_flow/control_flow-rust",
     "lang/control_flow/control_flow-wgsl",
+    "lang/control_flow/control_flow-opencl",
     "lang/control_flow_complex/control_flow_complex-rust",
     "lang/control_flow_complex/control_flow_complex-wgsl",
+    "lang/control_flow_complex/control_flow_complex-opencl",
     "lang/core/ops/math_ops/math_ops-rust",
     "lang/core/ops/math_ops/math_ops-wgsl",
     "lang/core/ops/vector_ops/vector_ops-rust",
@@ -45,6 +51,7 @@ members = [
     "lang/core/ops/trig_ops/trig_ops-wgsl",
     "lang/core/ops/vector_swizzle/vector_swizzle-rust",
     "lang/core/ops/vector_swizzle/vector_swizzle-wgsl",
+    "lang/core/ops/vector_swizzle/vector_swizzle-opencl",
     "lang/core/intrinsics/black_box_noop/with-black-box",
     "lang/core/intrinsics/black_box_noop/without-black-box",
     "lang/core/intrinsics/trailing_zeros_64/trailing_zeros_64-rust",
@@ -72,6 +79,7 @@ difftest-types = { path = "../types" }
 # External dependencies that need to be mentioned more than once.
 num-traits = { version = "0.2.15", default-features = false }
 bytemuck = { version = "1.23", features = ["derive"] }
+glam = { version = "0.33.0", default-features = false, features = ["libm", "u32", "i32", "f64", "usize", "u64"] }
 
 # Enable incremental by default in release mode.
 [profile.release]

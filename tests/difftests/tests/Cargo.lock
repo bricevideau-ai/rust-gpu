@@ -108,6 +108,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d67af77d68a931ecd5cbd8a3b5987d63a1d1d1278f7f6a60ae33db485cdebb69"
 
 [[package]]
+name = "array_access-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "array_access-rust"
 version = "0.0.0"
 dependencies = [
@@ -137,6 +146,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
 dependencies = [
  "libloading",
+]
+
+[[package]]
+name = "atomic_ops-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
 ]
 
 [[package]]
@@ -431,6 +449,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "control_flow-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "control_flow-rust"
 version = "0.0.0"
 dependencies = [
@@ -445,6 +472,15 @@ version = "0.0.0"
 dependencies = [
  "bytemuck",
  "difftest",
+]
+
+[[package]]
+name = "control_flow_complex-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
 ]
 
 [[package]]
@@ -1875,6 +1911,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
+name = "simple-compute-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "simple-compute-rust"
 version = "0.0.0"
 dependencies = [
@@ -2352,6 +2396,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
+name = "vector_extract_insert-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "glam",
+ "spirv-std",
+]
+
+[[package]]
 name = "vector_extract_insert-rust"
 version = "0.0.0"
 dependencies = [
@@ -2381,6 +2435,16 @@ version = "0.0.0"
 dependencies = [
  "bytemuck",
  "difftest",
+]
+
+[[package]]
+name = "vector_swizzle-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "glam",
+ "spirv-std",
 ]
 
 [[package]]

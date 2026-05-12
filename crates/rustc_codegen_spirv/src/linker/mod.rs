@@ -8,6 +8,7 @@ mod entry_interface;
 mod import_export_link;
 mod inline;
 mod ipo;
+mod kernel_arguments;
 mod mem2reg;
 mod param_weakening;
 mod peephole_opts;
@@ -490,6 +491,11 @@ pub fn link(
     {
         let _timer = sess.timer("link_remove_non_uniform");
         simple_passes::remove_non_uniform_decorations(sess, &mut output)?;
+    }
+
+    {
+        let _timer = sess.timer("link_convert_kernel_arguments");
+        kernel_arguments::convert_kernel_arguments(&mut output);
     }
 
     // NOTE(eddyb) SPIR-T pipeline is entirely limited to this block.
