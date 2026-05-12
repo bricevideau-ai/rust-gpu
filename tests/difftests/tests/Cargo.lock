@@ -2747,6 +2747,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vector_ops-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "vector_ops-rust"
 version = "0.0.0"
 dependencies = [

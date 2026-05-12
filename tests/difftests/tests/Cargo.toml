@@ -42,6 +42,7 @@ members = [
     "lang/core/ops/math_ops/math_ops-wgsl",
     "lang/core/ops/vector_ops/vector_ops-rust",
     "lang/core/ops/vector_ops/vector_ops-wgsl",
+    "lang/core/ops/vector_ops/vector_ops-opencl",
     "lang/core/ops/matrix_ops/matrix_ops-rust",
     "lang/core/ops/matrix_ops/matrix_ops-wgsl",
     "lang/core/ops/matrix_ops/matrix_ops-opencl",
