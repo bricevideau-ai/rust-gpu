@@ -4,6 +4,7 @@ members = [
     "lib",
     "simple-compute/simple-compute-rust",
     "simple-compute/simple-compute-wgsl",
+    "simple-compute/simple-compute-opencl",
     "arch/atomic_ops/atomic_ops-rust",
     "arch/atomic_ops/atomic_ops-wgsl",
     "arch/workgroup_memory/workgroup_memory-rust",
