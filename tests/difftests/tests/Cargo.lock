@@ -149,6 +149,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic_ops-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "atomic_ops-rust"
 version = "0.0.0"
 dependencies = [
