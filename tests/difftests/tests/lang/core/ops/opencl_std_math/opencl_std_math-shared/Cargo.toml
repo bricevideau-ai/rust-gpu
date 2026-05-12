@@ -1,0 +1,9 @@
+[package]
+name = "opencl_std_math-shared"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+spirv-std.workspace = true

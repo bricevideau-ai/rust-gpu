@@ -1,0 +1,10 @@
+[package]
+name = "math_ops_opencl_f64-cpu-rust"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+difftest.workspace = true
+math_ops_opencl_f64-shared = { path = "../math_ops_opencl_f64-shared" }

@@ -1,0 +1,16 @@
+[package]
+name = "bitwise_ops_opencl-opencl"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+# Common deps
+[dependencies]
+spirv-std.workspace = true
+difftest.workspace = true
+bitwise_ops_opencl-shared = { path = "../bitwise_ops_opencl-shared" }
+
+# CPU deps
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+bytemuck.workspace = true
