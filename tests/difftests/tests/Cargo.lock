@@ -2075,6 +2075,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "saturating_ops_vec-cpu-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops_vec-shared",
+]
+
+[[package]]
+name = "saturating_ops_vec-cpu-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops_vec-shared",
+]
+
+[[package]]
+name = "saturating_ops_vec-opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops_vec-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "saturating_ops_vec-opencl-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops_vec-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "saturating_ops_vec-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

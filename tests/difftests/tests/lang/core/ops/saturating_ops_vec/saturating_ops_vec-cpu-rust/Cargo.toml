@@ -1,0 +1,10 @@
+[package]
+name = "saturating_ops_vec-cpu-rust"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+difftest.workspace = true
+saturating_ops_vec-shared = { path = "../saturating_ops_vec-shared" }
