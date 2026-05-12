@@ -1,0 +1,15 @@
+[package]
+name = "saturating_ops_vec-opencl-rust"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+# Common deps
+[dependencies]
+spirv-std.workspace = true
+saturating_ops_vec-shared = { path = "../saturating_ops_vec-shared" }
+
+# CPU deps
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+difftest.workspace = true

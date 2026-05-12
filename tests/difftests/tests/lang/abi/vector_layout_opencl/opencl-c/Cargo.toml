@@ -1,0 +1,15 @@
+[package]
+name = "abi-vector-layout-opencl-c"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+abi-vector-layout-opencl-cpu = { path = "../cpu" }
+difftest.workspace = true
+bytemuck.workspace = true
+anyhow = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+opencl3 = "0.12"
