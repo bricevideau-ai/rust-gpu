@@ -29,11 +29,13 @@ fn main() {
                 size: input_bytes.len() as u64,
                 usage: BufferUsage::StorageReadOnly,
                 initial_data: Some(input_bytes),
+                element_size: 1,
             },
             BufferConfig {
                 size: output_size,
                 usage: BufferUsage::Storage,
                 initial_data: None,
+                element_size: 1,
             },
         ];
 

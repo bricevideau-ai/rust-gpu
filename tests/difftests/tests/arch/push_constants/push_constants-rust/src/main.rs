@@ -38,11 +38,13 @@ fn main() {
                 size: buffer_size as u64,
                 usage: BufferUsage::StorageReadOnly,
                 initial_data: Some(input_bytes),
+                element_size: 1,
             },
             BufferConfig {
                 size: buffer_size as u64,
                 usage: BufferUsage::Storage,
                 initial_data: None,
+                element_size: 1,
             },
         ],
         std::mem::size_of::<PushConstants>() as u32,
