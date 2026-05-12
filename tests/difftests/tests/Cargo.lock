@@ -273,6 +273,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitwise_ops_opencl-cpu"
+version = "0.0.0"
+dependencies = [
+ "bitwise_ops_opencl-shared",
+ "bytemuck",
+ "difftest",
+]
+
+[[package]]
+name = "bitwise_ops_opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "bitwise_ops_opencl-shared",
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
+name = "bitwise_ops_opencl-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
 name = "black_box-noop-with"
 version = "0.0.0"
 dependencies = [
