@@ -1,0 +1,11 @@
+[package]
+name = "bitwise_ops_opencl-cpu"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+difftest.workspace = true
+bytemuck.workspace = true
+bitwise_ops_opencl-shared = { path = "../bitwise_ops_opencl-shared" }

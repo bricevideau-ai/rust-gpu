@@ -1,0 +1,10 @@
+[package]
+name = "math_ops_opencl-shared"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+spirv-std.workspace = true
+num-traits.workspace = true

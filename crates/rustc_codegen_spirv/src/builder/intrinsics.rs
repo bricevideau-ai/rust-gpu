@@ -8,7 +8,7 @@ use crate::codegen_cx::CodegenCx;
 use crate::custom_insts::CustomInst;
 use crate::spirv_type::SpirvType;
 use rspirv::dr::Operand;
-use rspirv::spirv::GLOp;
+use rspirv::spirv::{Capability, GLOp, Word};
 use rustc_codegen_ssa::RetagInfo;
 use rustc_codegen_ssa::mir::operand::{OperandRef, OperandValue};
 use rustc_codegen_ssa::mir::place::PlaceRef;
@@ -119,33 +119,55 @@ impl<'a, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'tcx> {
 
             sym::saturating_add => {
                 assert_eq!(arg_tys[0], arg_tys[1]);
-                let result = match arg_tys[0].kind() {
-                    TyKind::Int(_) | TyKind::Uint(_) => {
-                        self.add(args[0].immediate(), args[1].immediate())
+                if self.cx.builder.has_capability(Capability::Kernel) {
+                    let a = args[0].immediate();
+                    let b = args[1].immediate();
+                    match arg_tys[0].kind() {
+                        TyKind::Int(_) => self.opencl_op(143, ret_ty, [a, b]),
+                        TyKind::Uint(_) => self.opencl_op(144, ret_ty, [a, b]),
+                        other => self.fatal(format!(
+                            "Unimplemented saturating_add intrinsic type: {other:#?}"
+                        )),
                     }
-                    TyKind::Float(_) => self.fadd(args[0].immediate(), args[1].immediate()),
-                    other => self.fatal(format!(
-                        "Unimplemented saturating_add intrinsic type: {other:#?}"
-                    )),
-                };
-                // TODO: Implement this
-                self.zombie(result.def(self), "saturating_add is not implemented yet");
-                result
+                } else {
+                    let result = match arg_tys[0].kind() {
+                        TyKind::Int(_) | TyKind::Uint(_) => {
+                            self.add(args[0].immediate(), args[1].immediate())
+                        }
+                        TyKind::Float(_) => self.fadd(args[0].immediate(), args[1].immediate()),
+                        other => self.fatal(format!(
+                            "Unimplemented saturating_add intrinsic type: {other:#?}"
+                        )),
+                    };
+                    self.zombie(result.def(self), "saturating_add is not implemented yet");
+                    result
+                }
             }
             sym::saturating_sub => {
                 assert_eq!(arg_tys[0], arg_tys[1]);
-                let result = match &arg_tys[0].kind() {
-                    TyKind::Int(_) | TyKind::Uint(_) => {
-                        self.sub(args[0].immediate(), args[1].immediate())
+                if self.cx.builder.has_capability(Capability::Kernel) {
+                    let a = args[0].immediate();
+                    let b = args[1].immediate();
+                    match arg_tys[0].kind() {
+                        TyKind::Int(_) => self.opencl_op(162, ret_ty, [a, b]),
+                        TyKind::Uint(_) => self.opencl_op(163, ret_ty, [a, b]),
+                        other => self.fatal(format!(
+                            "Unimplemented saturating_sub intrinsic type: {other:#?}"
+                        )),
                     }
-                    TyKind::Float(_) => self.fsub(args[0].immediate(), args[1].immediate()),
-                    other => self.fatal(format!(
-                        "Unimplemented saturating_sub intrinsic type: {other:#?}"
-                    )),
-                };
-                // TODO: Implement this
-                self.zombie(result.def(self), "saturating_sub is not implemented yet");
-                result
+                } else {
+                    let result = match &arg_tys[0].kind() {
+                        TyKind::Int(_) | TyKind::Uint(_) => {
+                            self.sub(args[0].immediate(), args[1].immediate())
+                        }
+                        TyKind::Float(_) => self.fsub(args[0].immediate(), args[1].immediate()),
+                        other => self.fatal(format!(
+                            "Unimplemented saturating_sub intrinsic type: {other:#?}"
+                        )),
+                    };
+                    self.zombie(result.def(self), "saturating_sub is not implemented yet");
+                    result
+                }
             }
 
             sym::sqrtf32 | sym::sqrtf64 | sym::sqrtf128 => {
@@ -205,6 +227,32 @@ impl<'a, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'a, 'tcx> {
                 ret_ty,
                 [args[0].immediate(), args[1].immediate()],
             ),
+            // `f32::min` / `f64::min` (Rust's IEEE-754 `minNum`-style,
+            // NaN-ignoring) are lowered by core to the
+            // `minimum_number_nsz_*` / `maximum_number_nsz_*` intrinsics.
+            // On Kernel targets we route these to `OpExtInst <OpenCL.std>
+            // fmin_common`/`fmax_common` (opcodes 98/97) — these have the
+            // exact NaN-ignoring semantics Rust expects, unlike the GLSL.std.450
+            // `FMin`/`FMax` which are NaN-undefined per spec. There's no
+            // `GLSL.std.450` equivalent (the closest is `FMin` itself, with
+            // the wrong NaN behaviour), so on Vulkan/Shader targets we fall
+            // through to the unintercepted inlined Rust source — accepting
+            // that lower-quality codegen is the right call when the
+            // alternative is silently wrong NaN handling.
+            sym::minimum_number_nsz_f32
+            | sym::minimum_number_nsz_f64
+            | sym::minimum_number_nsz_f128
+                if self.cx.builder.has_capability(Capability::Kernel) =>
+            {
+                self.opencl_op(98, ret_ty, [args[0].immediate(), args[1].immediate()])
+            }
+            sym::maximum_number_nsz_f32
+            | sym::maximum_number_nsz_f64
+            | sym::maximum_number_nsz_f128
+                if self.cx.builder.has_capability(Capability::Kernel) =>
+            {
+                self.opencl_op(97, ret_ty, [args[0].immediate(), args[1].immediate()])
+            }
             sym::copysignf32 | sym::copysignf64 | sym::copysignf128 => {
                 let val = args[0].immediate();
                 let sign = args[1].immediate();
@@ -475,6 +523,15 @@ impl Builder<'_, '_> {
                 let u32 = SpirvType::Integer(32, false).def(self.span(), self);
                 let uint = SpirvType::Integer(bits, false).def(self.span(), self);
 
+                if self.cx.builder.has_capability(Capability::Kernel) {
+                    self.cx
+                        .builder
+                        .require_capability(Capability::BitInstructions);
+                    self.cx
+                        .builder
+                        .require_extension("SPV_KHR_bit_instructions");
+                }
+
                 match bits {
                     8 | 16 => {
                         let arg = arg.def(self);
@@ -541,6 +598,10 @@ impl Builder<'_, '_> {
             SpirvType::Integer(bits, false) => {
                 let bool = SpirvType::Bool.def(self.span(), self);
                 let u32 = SpirvType::Integer(32, false).def(self.span(), self);
+
+                if self.cx.builder.has_capability(Capability::Kernel) {
+                    return self.count_leading_trailing_zeros_kernel(arg, ty, bits, trailing);
+                }
 
                 let glsl = self.ext_inst.borrow_mut().import_glsl(self);
                 let find_xsb = |this: &mut Self, arg, offset: i32| {
@@ -662,6 +723,35 @@ impl Builder<'_, '_> {
                 ));
             }
         }
+    }
+
+    fn count_leading_trailing_zeros_kernel(
+        &mut self,
+        arg: SpirvValue,
+        ty: Word,
+        bits: u32,
+        trailing: bool,
+    ) -> SpirvValue {
+        let u32 = SpirvType::Integer(32, false).def(self.span(), self);
+        let opencl = self.ext_inst.borrow_mut().import_opencl(self);
+
+        // OpenCL.std `clz` (151) and `ctz` (152) are always available in the
+        // OpenCL extended instruction set for SPIR-V — the OpenCL 2.0+ minimum
+        // applies to OpenCL C source, not to the SPIR-V binary form. Both ops
+        // already return the size in bits of the type when x == 0, matching
+        // Rust's `T::leading_zeros` / `T::trailing_zeros` semantics — so no
+        // need to special-case the zero input regardless of `non_zero`.
+        let op = if trailing { 152 } else { 151 };
+        let raw = self
+            .emit()
+            .ext_inst(ty, None, opencl, op, [Operand::IdRef(arg.def(self))])
+            .unwrap();
+        if bits == 32 {
+            raw
+        } else {
+            self.emit().u_convert(u32, None, raw).unwrap()
+        }
+        .with_type(u32)
     }
 
     pub fn abort_with_kind_and_message_debug_printf(

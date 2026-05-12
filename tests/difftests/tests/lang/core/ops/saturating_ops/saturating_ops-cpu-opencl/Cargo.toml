@@ -1,0 +1,10 @@
+[package]
+name = "saturating_ops-cpu-opencl"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+difftest.workspace = true
+saturating_ops-shared = { path = "../saturating_ops-shared" }

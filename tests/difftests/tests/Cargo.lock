@@ -241,6 +241,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitwise_ops_opencl-cpu"
+version = "0.0.0"
+dependencies = [
+ "bitwise_ops_opencl-shared",
+ "bytemuck",
+ "difftest",
+]
+
+[[package]]
+name = "bitwise_ops_opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "bitwise_ops_opencl-shared",
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
+name = "bitwise_ops_opencl-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
 name = "black_box-noop-with"
 version = "0.0.0"
 dependencies = [
@@ -1259,6 +1285,92 @@ dependencies = [
 ]
 
 [[package]]
+name = "math_ops_opencl-cpu-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl-shared",
+]
+
+[[package]]
+name = "math_ops_opencl-cpu-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl-shared",
+]
+
+[[package]]
+name = "math_ops_opencl-opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "math_ops_opencl-opencl-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "math_ops_opencl-shared"
+version = "0.0.0"
+dependencies = [
+ "num-traits",
+ "spirv-std",
+]
+
+[[package]]
+name = "math_ops_opencl_f64-cpu-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl_f64-shared",
+]
+
+[[package]]
+name = "math_ops_opencl_f64-cpu-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl_f64-shared",
+]
+
+[[package]]
+name = "math_ops_opencl_f64-opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl_f64-shared",
+ "spirv-builder",
+ "spirv-std",
+]
+
+[[package]]
+name = "math_ops_opencl_f64-opencl-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "math_ops_opencl_f64-shared",
+ "spirv-builder",
+ "spirv-std",
+]
+
+[[package]]
+name = "math_ops_opencl_f64-shared"
+version = "0.0.0"
+dependencies = [
+ "num-traits",
+ "spirv-std",
+]
+
+[[package]]
 name = "matrix_ops-opencl"
 version = "0.0.0"
 dependencies = [
@@ -1490,6 +1602,61 @@ checksum = "ecb3473c4f01afd0eea3ee5b31649fec47dbc23353a63e1b916aa67cd810fb73"
 dependencies = [
  "cl3",
  "libc",
+]
+
+[[package]]
+name = "opencl_std_math-cpu"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64-cpu"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_f64-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "opencl_std_math_f64-shared",
+ "spirv-builder",
+ "spirv-std",
+]
+
+[[package]]
+name = "opencl_std_math_f64-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
 ]
 
 [[package]]
@@ -1815,6 +1982,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc984f4f9ceb736a7bb755c3e3bd17dc56370af2600c9780dcc48c66453da34d"
 dependencies = [
  "regex",
+]
+
+[[package]]
+name = "saturating_ops-cpu-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops-shared",
+]
+
+[[package]]
+name = "saturating_ops-cpu-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops-shared",
+]
+
+[[package]]
+name = "saturating_ops-opencl-opencl"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "saturating_ops-opencl-rust"
+version = "0.0.0"
+dependencies = [
+ "difftest",
+ "saturating_ops-shared",
+ "spirv-std",
+]
+
+[[package]]
+name = "saturating_ops-shared"
+version = "0.0.0"
+dependencies = [
+ "spirv-std",
 ]
 
 [[package]]
@@ -2332,6 +2540,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailing_zeros_64-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "trailing_zeros_64-rust"
 version = "0.0.0"
 dependencies = [
@@ -2436,6 +2653,15 @@ name = "vector_extract_insert-wgsl"
 version = "0.0.0"
 dependencies = [
  "difftest",
+]
+
+[[package]]
+name = "vector_ops-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
 ]
 
 [[package]]
