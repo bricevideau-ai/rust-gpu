@@ -790,7 +790,16 @@ impl<'tcx> BuilderSpirv<'tcx> {
             SpirvConst::Composite(v) => builder.constant_composite(ty, v.iter().copied()),
 
             SpirvConst::PtrTo { pointee } => {
-                builder.variable(ty, None, StorageClass::Private, Some(pointee))
+                // For Kernel (OpenCL) targets, use UniformConstant instead of
+                // Private — Private requires the Shader capability, while
+                // UniformConstant is valid for read-only globals in the Kernel
+                // execution model.
+                let storage_class = if self.is_kernel_mode() {
+                    StorageClass::UniformConstant
+                } else {
+                    StorageClass::Private
+                };
+                builder.variable(ty, None, storage_class, Some(pointee))
             }
         };
         #[allow(clippy::match_same_arms)]

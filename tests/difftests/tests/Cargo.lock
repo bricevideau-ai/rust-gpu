@@ -1151,6 +1151,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "matrix_ops-opencl"
+version = "0.0.0"
+dependencies = [
+ "bytemuck",
+ "difftest",
+ "spirv-std",
+]
+
+[[package]]
 name = "matrix_ops-rust"
 version = "0.0.0"
 dependencies = [
