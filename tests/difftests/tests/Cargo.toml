@@ -16,6 +16,7 @@ members = [
     "arch/memory_barriers/memory_barriers-opencl",
     "arch/vector_extract_insert/vector_extract_insert-rust",
     "arch/vector_extract_insert/vector_extract_insert-wgsl",
+    "arch/vector_extract_insert/vector_extract_insert-opencl",
     "arch/push_constants/push_constants-rust",
     "arch/push_constants/push_constants-wgsl",
     "storage_class/array_access/array_access-rust",
