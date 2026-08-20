@@ -2010,7 +2010,6 @@ dependencies = [
 name = "kernel-image-shader"
 version = "0.0.0"
 dependencies = [
- "glam",
  "spirv-std",
 ]
 
@@ -2018,7 +2017,6 @@ dependencies = [
 name = "kernel-sampler-shader"
 version = "0.0.0"
 dependencies = [
- "glam",
  "spirv-std",
 ]
 
