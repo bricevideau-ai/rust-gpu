@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C target-feature=+Int64,+Geometry,+GeometryStreams
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 

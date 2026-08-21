@@ -1,11 +1,11 @@
 // build-pass
 // compile-flags: -Ctarget-feature=+MeshShadingEXT,+ext:SPV_EXT_mesh_shader
 // compile-flags: -C llvm-args=--disassemble-globals
-// normalize-stderr-test "OpSource .*\n" -> ""
-// normalize-stderr-test "OpLine .*\n" -> ""
-// normalize-stderr-test "%\d+ = OpString .*\n" -> ""
-// normalize-stderr-test "; .*\n" -> ""
-// normalize-stderr-test "OpCapability VulkanMemoryModel\n" -> ""
+// normalize-stderr-test "\n\W*OpSource .*" -> ""
+// normalize-stderr-test "\n\W*OpLine .*" -> ""
+// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
+// normalize-stderr-test "\n\W*; .*" -> ""
+// normalize-stderr-test "\n\W*OpCapability VulkanMemoryModel" -> ""
 // normalize-stderr-test "OpMemoryModel Logical Vulkan" -> "OpMemoryModel Logical Simple"
 // ignore-spv1.0
 // ignore-spv1.1
@@ -13,6 +13,8 @@
 // ignore-spv1.3
 // ignore-vulkan1.0
 // ignore-vulkan1.1
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::arch::set_mesh_outputs_ext;
 use spirv_std::glam::{UVec3, Vec4};

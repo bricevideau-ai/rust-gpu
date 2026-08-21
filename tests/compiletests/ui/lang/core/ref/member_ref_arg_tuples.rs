@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // build-pass
 // normalize-stderr-test     "ref/member_ref_arg-broken\.[^`]*" -> "ref/member_ref_arg-broken"
 // normalize-stderr-test     "38\[%38\]" -> "$$ID[%$$ID]"

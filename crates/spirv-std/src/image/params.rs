@@ -146,6 +146,10 @@ impl<V: Vector<S, 3>, S: Scalar>
 {
 }
 
+impl<V: Vector<S, 2>, S: Scalar>
+    ImageCoordinate<S, { Dimensionality::OneD as u32 }, { Arrayed::True as u32 }> for V
+{
+}
 impl<V: Vector<S, 3>, S: Scalar>
     ImageCoordinate<S, { Dimensionality::TwoD as u32 }, { Arrayed::True as u32 }> for V
 {

@@ -1,0 +1,70 @@
+               OpCapability Shader
+               OpMemoryModel Logical Simple
+               OpEntryPoint Vertex %1 "main" %tid %a %at
+               OpName %AT "AT"
+               OpName %A "A"
+               OpMemberName %A 0 "0"
+               OpName %B "B"
+               OpMemberName %B 0 "0"
+               OpName %tid "tid"
+               OpName %A "A"
+               OpMemberName %A 0 "0"
+               OpName %B "B"
+               OpMemberName %B 0 "0"
+               OpName %a "a"
+               OpName %at "at"
+               OpDecorate %tid BuiltIn LocalInvocationIndex
+               OpMemberDecorate %A 0 Offset 0
+               OpMemberDecorate %B 0 Offset 0
+               OpDecorate %a Location 0
+               OpDecorate %at Location 1
+        %u32 = OpTypeInt 32 0
+         %AT = OpTypeVector %u32 3
+          %A = OpTypeStruct %AT
+          %B = OpTypeStruct %A
+%_ptr_Output_B = OpTypePointer Output %B
+%_ptr_Output_AT = OpTypePointer Output %AT
+%_ptr_Input_u32 = OpTypePointer Input %u32
+       %void = OpTypeVoid
+         %17 = OpTypeFunction %void
+        %tid = OpVariable %_ptr_Input_u32 Input
+      %u32_1 = OpConstant %u32 1
+      %u32_2 = OpConstant %u32 2
+          %A = OpTypeStruct %AT
+          %B = OpTypeStruct %A
+         %20 = OpUndef %B
+          %a = OpVariable %_ptr_Output_B Output
+      %u32_0 = OpConstant %u32 0
+%_ptr_Output_u32 = OpTypePointer Output %u32
+      %u32_4 = OpConstant %u32 4
+         %at = OpVariable %_ptr_Output_AT Output
+      %u32_5 = OpConstant %u32 5
+          %1 = OpFunction %void None %17
+         %25 = OpLabel
+         %26 = OpLoad %u32 %tid
+         %27 = OpCompositeConstruct %AT %26 %u32_1 %u32_2
+         %28 = OpCompositeInsert %B %27 %20 0 0
+         %29 = OpInBoundsAccessChain %_ptr_Output_AT %a %u32_0 %u32_0
+         %30 = OpCompositeExtract %AT %28 0 0
+               OpStore %29 %30
+         %31 = OpInBoundsAccessChain %_ptr_Output_u32 %a %u32_0 %u32_0 %u32_1
+         %32 = OpIAdd %u32 %26 %u32_1
+               OpStore %31 %32
+         %33 = OpInBoundsAccessChain %_ptr_Output_u32 %a %u32_0 %u32_0 %u32_0
+         %34 = OpLoad %u32 %33
+         %35 = OpIAdd %u32 %34 %u32_4
+         %36 = OpInBoundsAccessChain %_ptr_Output_u32 %a %u32_0 %u32_0 %u32_0
+               OpStore %36 %35
+         %37 = OpCompositeConstruct %AT %26 %u32_1 %u32_2
+               OpStore %at %37
+         %38 = OpInBoundsAccessChain %_ptr_Output_u32 %at %u32_1
+         %39 = OpIAdd %u32 %26 %u32_2
+               OpStore %38 %39
+         %40 = OpInBoundsAccessChain %_ptr_Output_u32 %at %u32_0
+         %41 = OpLoad %u32 %40
+         %42 = OpIAdd %u32 %41 %u32_5
+         %43 = OpInBoundsAccessChain %_ptr_Output_u32 %at %u32_0
+               OpStore %43 %42
+               OpNoLine
+               OpReturn
+               OpFunctionEnd

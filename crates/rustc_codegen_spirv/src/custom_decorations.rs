@@ -177,6 +177,44 @@ impl<'a> CustomDecoration<'a> for SrcLocDecoration<'a> {
     }
 }
 
+/// Tags an `OpVariable` emitted by entry-stub codegen for an `OpenCL` Kernel
+/// entry point with its source-position-derived sort key, so that the
+/// `kernel_arguments` linker pass can recover the Rust source parameter
+/// order when collapsing globals into `OpFunctionParameter`s.
+///
+/// `entry_func` is the entry-point function ID that the variable belongs to
+/// (a single SPIR-V module can have multiple kernel entries with their own
+/// globals). `position` encodes the Rust source-parameter index plus a
+/// sub-position bit for slice decomposition (where one Rust param expands
+/// into a `(ptr, len)` pair of `OpVariable`s):
+/// `position = (rust_param_idx << 1) | sub_position`.
+///
+/// Stripped by the `kernel_arguments` linker pass once it's done sorting.
+#[derive(Copy, Clone)]
+pub struct KernelParamPositionDecoration {
+    pub entry_func: Word,
+    pub position: u32,
+}
+
+impl<'a> CustomDecoration<'a> for KernelParamPositionDecoration {
+    const ENCODING_PREFIX: &'static str = "K";
+
+    fn encode(self, w: &mut impl fmt::Write) -> fmt::Result {
+        let Self {
+            entry_func,
+            position,
+        } = self;
+        write!(w, "{entry_func}:{position}")
+    }
+    fn decode(s: &'a str) -> Self {
+        let (entry_func, position) = s.split_once(':').unwrap();
+        Self {
+            entry_func: entry_func.parse().unwrap(),
+            position: position.parse().unwrap(),
+        }
+    }
+}
+
 impl<'tcx> SrcLocDecoration<'tcx> {
     pub fn from_rustc_span(span: Span, builder: &BuilderSpirv<'tcx>) -> Option<Self> {
         // We may not always have valid spans.

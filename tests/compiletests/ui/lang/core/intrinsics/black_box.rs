@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C llvm-args=--disassemble-fn=black_box::disassemble
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![no_std]
 
 use core::hint::black_box;

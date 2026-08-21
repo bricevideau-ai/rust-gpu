@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -Ctarget-feature=+Int64,+ShaderClockKHR,+ext:SPV_KHR_shader_clock
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use glam::UVec2;
 use spirv_std::spirv;

@@ -6,6 +6,7 @@ use crate::abi::ConvSpirvType;
 use crate::attr::{AggregatedSpirvAttributes, Entry, Spanned, SpecConstant};
 use crate::builder::Builder;
 use crate::builder_spirv::{SpirvFunctionCursor, SpirvValue, SpirvValueExt};
+use crate::custom_decorations::{CustomDecoration, KernelParamPositionDecoration};
 use crate::spirv_type::SpirvType;
 use rspirv::dr::Operand;
 use rspirv::spirv::{
@@ -122,7 +123,6 @@ impl<'tcx> CodegenCx<'tcx> {
             );
         }
 
-        // let execution_model = entry.execution_model;
         let stub = self.shader_entry_stub(
             span,
             entry_instance,
@@ -174,7 +174,9 @@ impl<'tcx> CodegenCx<'tcx> {
         let mut bx = Builder::build(self, Builder::append_block(self, stub_fn, ""));
         let mut call_args = vec![];
         let mut decoration_locations = FxHashMap::default();
-        for (entry_arg_abi, hir_param) in entry_fn_abi.args.iter().zip(hir_params) {
+        for (rust_param_idx, (entry_arg_abi, hir_param)) in
+            entry_fn_abi.args.iter().zip(hir_params).enumerate()
+        {
             bx.set_span(hir_param.span);
             self.declare_shader_interface_for_param(
                 execution_model,
@@ -184,6 +186,8 @@ impl<'tcx> CodegenCx<'tcx> {
                 &mut bx,
                 &mut call_args,
                 &mut decoration_locations,
+                stub_fn.id,
+                rust_param_idx,
             );
         }
         bx.set_span(span);
@@ -213,6 +217,7 @@ impl<'tcx> CodegenCx<'tcx> {
     // FIXME(eddyb) document this by itself.
     fn entry_param_deduce_from_rust_ref_or_value(
         &self,
+        execution_model: ExecutionModel,
         ref_or_value_layout: TyAndLayout<'tcx>,
         hir_param: &hir::Param<'tcx>,
         attrs: &AggregatedSpirvAttributes,
@@ -324,19 +329,30 @@ impl<'tcx> CodegenCx<'tcx> {
 
             storage_class
         });
-        // If storage class was not deduced nor specified, compute the default (i.e. input/output)
+        // If storage class was not deduced nor specified, compute the default.
+        // For Kernel (OpenCL) entry points, references default to CrossWorkgroup
+        // (global memory). For shader entry points, the default is Input/Output.
         let storage_class = deduced_storage_class_from_ty
             .or(attr_storage_class)
-            .unwrap_or_else(|| match (is_ref, explicit_mutbl) {
-                (false, _) => StorageClass::Input,
-                (true, hir::Mutability::Mut) => StorageClass::Output,
-                (true, hir::Mutability::Not) => self.tcx.dcx().span_fatal(
-                    hir_param.ty_span,
-                    format!(
-                        "invalid entry param type `{}` (expected `{}` or `&mut {1}`)",
-                        ref_or_value_layout.ty, value_layout.ty
-                    ),
-                ),
+            .unwrap_or_else(|| {
+                if execution_model == ExecutionModel::Kernel {
+                    match (is_ref, explicit_mutbl) {
+                        (false, _) => StorageClass::Input,
+                        (true, _) => StorageClass::CrossWorkgroup,
+                    }
+                } else {
+                    match (is_ref, explicit_mutbl) {
+                        (false, _) => StorageClass::Input,
+                        (true, hir::Mutability::Mut) => StorageClass::Output,
+                        (true, hir::Mutability::Not) => self.tcx.dcx().span_fatal(
+                            hir_param.ty_span,
+                            format!(
+                                "invalid entry param type `{}` (expected `{}` or `&mut {1}`)",
+                                ref_or_value_layout.ty, value_layout.ty
+                            ),
+                        ),
+                    }
+                }
             });
 
         // Validate reference mutability against the *final* storage class.
@@ -346,7 +362,9 @@ impl<'tcx> CodegenCx<'tcx> {
             let ref_is_read_only = read_only;
             let storage_class_requires_read_only =
                 expected_mutbl_for(storage_class) == hir::Mutability::Not;
-            if !ref_is_read_only && storage_class_requires_read_only {
+            let is_kernel_image = execution_model == ExecutionModel::Kernel
+                && matches!(element_ty, SpirvType::Image { .. });
+            if !ref_is_read_only && storage_class_requires_read_only && !is_kernel_image {
                 let mut err = self.tcx.dcx().struct_span_err(
                     hir_param.ty_span,
                     format!(
@@ -438,15 +456,187 @@ impl<'tcx> CodegenCx<'tcx> {
         bx: &mut Builder<'_, 'tcx>,
         call_args: &mut Vec<SpirvValue>,
         decoration_locations: &mut FxHashMap<StorageClass, u32>,
+        // For Kernel entry points: the entry function's `OpFunction` ID and
+        // the position of this parameter in the Rust source signature. Used
+        // to emit a `KernelParamPositionDecoration` on each global
+        // `OpVariable` so the linker's `kernel_arguments` pass can recover
+        // source order. (Codegen emits globals in an order influenced by
+        // dedup-by-type and multi-kernel interleaving, so positional
+        // recovery from `types_global_values` order is unreliable.)
+        kernel_entry_func: Word,
+        kernel_param_idx: usize,
     ) {
         let attrs = AggregatedSpirvAttributes::parse(self, self.tcx.hir_attrs(hir_param.hir_id));
+
+        // For Kernel only: tag a global `OpVariable` with its source-position
+        // sort key. `sub_pos` is `0` for the only/first global (or a slice's
+        // pointer) and `1` for a slice's length.
+        //
+        // BuiltIn-decorated variables are NOT tagged: they remain as global
+        // `Input` `OpVariable`s in the entry-point interface (the runtime
+        // populates them per work-item — they're not kernel arguments).
+        // Tagging them would also break the `remove_duplicate_types` linker
+        // pass, which uses annotations as part of its dedup key — multiple
+        // kernels' BuiltIn vars would no longer be merged into a single
+        // shared global, blowing up the SPIR-V's variable count.
+        let is_builtin = attrs.builtin.is_some();
+        let emit_kernel_param_pos = |var_id: Word, sub_pos: u32| {
+            if execution_model == ExecutionModel::Kernel && !is_builtin {
+                let position = ((kernel_param_idx as u32) << 1) | sub_pos;
+                let prefixed = format!(
+                    "{}{}:{}",
+                    KernelParamPositionDecoration::ENCODING_PREFIX,
+                    kernel_entry_func,
+                    position
+                );
+                self.emit_global().decorate_string(
+                    var_id,
+                    Decoration::UserTypeGOOGLE,
+                    std::iter::once(Operand::LiteralString(prefixed)),
+                );
+            }
+        };
 
         let EntryParamDeducedFromRustRefOrValue {
             value_layout,
             storage_class,
             read_only,
-        } = self.entry_param_deduce_from_rust_ref_or_value(entry_arg_abi.layout, hir_param, &attrs);
-        let value_spirv_type = value_layout.spirv_type(hir_param.ty_span, self);
+        } = self.entry_param_deduce_from_rust_ref_or_value(
+            execution_model,
+            entry_arg_abi.layout,
+            hir_param,
+            &attrs,
+        );
+        let mut value_spirv_type = value_layout.spirv_type(hir_param.ty_span, self);
+
+        // For Kernel entry points, set the OpTypeImage AccessQualifier per
+        // parameter. Resolution rules:
+        //
+        //   1. If the param carries an explicit
+        //      `#[spirv(image_access = "read_only"|"write_only"|"read_write")]`
+        //      attribute, that value wins. Coherence-checked against
+        //      Rust mutability: `read_only` requires `&Image`,
+        //      `write_only`/`read_write` require `&mut Image`. Incoherent
+        //      pairings are a hard error.
+        //   2. Otherwise, derive from Rust mutability:
+        //        - `&Image`     → ReadOnly. Always works on OpenCL 1.2+.
+        //        - `&mut Image` → ReadWrite. Requires the `ImageReadWrite`
+        //          capability (OpenCL 2.0+); auto-declared below when
+        //          emitted. Users targeting OpenCL 1.2 must use the
+        //          explicit `image_access = "write_only"` override.
+        //
+        // The Vulkan/Shader path bypasses this block entirely: SPIR-V's
+        // image AccessQualifier operand is OpenCL-Kernel-specific.
+        //
+        // Re-interns SpirvType::Image with the chosen qualifier so distinct
+        // OpTypeImage instances exist per access mode. Auto-adds
+        // `ImageBasic` (always for any kernel image param) and
+        // `ImageReadWrite` (only when ReadWrite is emitted) capabilities.
+        if execution_model == ExecutionModel::Kernel
+            && let SpirvType::Image {
+                sampled_type,
+                dim,
+                depth,
+                arrayed,
+                multisampled,
+                sampled,
+                image_format,
+                ..
+            } = self.lookup_type(value_spirv_type)
+        {
+            self.builder.require_capability(Capability::ImageBasic);
+
+            // Per the SPIR-V core spec, `OpTypeImage` operand `Dim`
+            // carries per-value capability requirements that
+            // `ImageBasic` alone does not satisfy:
+            //
+            //   Dim1D    → Sampled1D / Image1D
+            //   Dim2D    → (none — Kernel covers it)
+            //   Dim3D    → (none)
+            //   DimBuffer → SampledBuffer / ImageBuffer
+            //   DimCube/DimRect → Shader-only (not legal under Kernel)
+            //
+            // `Image1D` / `ImageBuffer` imply the matching `Sampled*`
+            // and cover both sampled-read and storage-image use, so
+            // we always declare the storage form for Kernel.
+            //
+            // Both are listed as allowed in OpenCL 1.2+ by
+            // `validate_opencl_capability`, so this auto-declare is
+            // env-spec safe.
+            match dim {
+                rspirv::spirv::Dim::Dim1D => {
+                    self.builder.require_capability(Capability::Image1D);
+                }
+                rspirv::spirv::Dim::DimBuffer => {
+                    self.builder.require_capability(Capability::ImageBuffer);
+                }
+                _ => {}
+            }
+
+            let explicit = attrs.image_access.as_ref().map(|s| s.value);
+            let access_qualifier = match explicit {
+                Some(rspirv::spirv::AccessQualifier::ReadOnly) => {
+                    if !read_only {
+                        self.tcx.dcx().span_err(
+                            hir_param.ty_span,
+                            "#[spirv(image_access = \"read_only\")] requires a `&Image` parameter, but this is `&mut Image`",
+                        );
+                    }
+                    rspirv::spirv::AccessQualifier::ReadOnly
+                }
+                Some(rspirv::spirv::AccessQualifier::WriteOnly) => {
+                    if read_only {
+                        self.tcx.dcx().span_err(
+                            hir_param.ty_span,
+                            "#[spirv(image_access = \"write_only\")] requires a `&mut Image` parameter, but this is `&Image`",
+                        );
+                    }
+                    rspirv::spirv::AccessQualifier::WriteOnly
+                }
+                Some(rspirv::spirv::AccessQualifier::ReadWrite) => {
+                    if read_only {
+                        self.tcx.dcx().span_err(
+                            hir_param.ty_span,
+                            "#[spirv(image_access = \"read_write\")] requires a `&mut Image` parameter, but this is `&Image`",
+                        );
+                    }
+                    // Will auto-declare ImageReadWrite below.
+                    rspirv::spirv::AccessQualifier::ReadWrite
+                }
+                None => {
+                    // No explicit override — derive from mutability.
+                    if read_only {
+                        rspirv::spirv::AccessQualifier::ReadOnly
+                    } else {
+                        rspirv::spirv::AccessQualifier::ReadWrite
+                    }
+                }
+            };
+
+            // Auto-declare `ImageReadWrite` whenever a `ReadWrite`
+            // OpTypeImage is emitted. The capability is restricted to
+            // OpenCL 2.0+ targets; if the user has selected an
+            // OpenCL 1.2 target env, `require_capability` →
+            // `validate_opencl_capability` will error with a clear
+            // message pointing the user at `image_access = "write_only"`
+            // (see the rule comment above) as the OpenCL-1.2-compatible
+            // alternative.
+            if access_qualifier == rspirv::spirv::AccessQualifier::ReadWrite {
+                self.builder.require_capability(Capability::ImageReadWrite);
+            }
+
+            value_spirv_type = SpirvType::Image {
+                sampled_type,
+                dim,
+                depth,
+                arrayed,
+                multisampled,
+                sampled,
+                image_format,
+                access_qualifier: Some(access_qualifier),
+            }
+            .def(hir_param.ty_span, self);
+        }
 
         let (var_id, spec_const_id) = match storage_class {
             // Pre-allocate the module-scoped `OpVariable` *Result* ID.
@@ -504,20 +694,29 @@ impl<'tcx> CodegenCx<'tcx> {
         // Certain storage classes require an `OpTypeStruct` decorated with `Block`,
         // which we represent with `SpirvType::InterfaceBlock` (see its doc comment).
         // This "interface block" construct is also required for "runtime arrays".
-        let is_unsized = self.lookup_type(value_spirv_type).sizeof(self).is_none();
+        let is_spirv_unsized = self.lookup_type(value_spirv_type).sizeof(self).is_none();
         let is_pair = matches!(entry_arg_abi.mode, PassMode::Pair(..));
-        let is_unsized_with_len = is_pair && is_unsized;
+        // For Kernel targets, [T] is lowered to the element type (sized in
+        // SPIR-V) instead of RuntimeArray, so the SPIR-V sizeof check gives
+        // the wrong answer for slice detection. Use the Rust layout instead.
+        let is_unsized_with_len = is_pair && value_layout.is_unsized();
         // HACK(eddyb) sanity check because we get the same information in two
         // very different ways, and going out of sync could cause subtle issues.
-        assert_eq!(
-            is_unsized_with_len,
-            value_layout.is_unsized(),
-            "`{}` param mismatch in call ABI (is_pair={is_pair}) + \
-             SPIR-V type (is_unsized={is_unsized}) \
-             vs layout:\n{value_layout:#?}",
-            entry_arg_abi.layout.ty
-        );
-        if is_pair && !is_unsized {
+        // NOTE(Kerilk) skipped for Kernel targets where [T] → element_type
+        // makes the SPIR-V type sized while the Rust layout is unsized, and
+        // for `#[spirv(runtime_array)]` intrinsics (sized in Rust, unsized
+        // in SPIR-V).
+        if !self.builder.is_kernel_mode() {
+            assert_eq!(
+                is_pair && is_spirv_unsized,
+                is_unsized_with_len,
+                "`{}` param mismatch in call ABI (is_pair={is_pair}) + \
+                 SPIR-V type (is_unsized={is_spirv_unsized}) \
+                 vs layout:\n{value_layout:#?}",
+                entry_arg_abi.layout.ty
+            );
+        }
+        if is_pair && !value_layout.is_unsized() {
             // If PassMode is Pair, then we need to fill in the second part of the pair with a
             // value. We currently only do that with unsized types, so if a type is a pair for some
             // other reason (e.g. a tuple), we bail.
@@ -550,6 +749,69 @@ impl<'tcx> CodegenCx<'tcx> {
                     SpirvType::InterfaceBlock { .. }
                 )
             };
+        // CrossWorkgroup (OpenCL) slices: decompose &[T] into two OpVariables
+        // (a pointer to the element type + a length), avoiding the Shader-only
+        // InterfaceBlock + OpArrayLength pattern used for StorageBuffer.
+        if storage_class == Ok(StorageClass::CrossWorkgroup) && is_unsized_with_len {
+            // For Kernel targets, [T] is lowered to element_type directly
+            // (no RuntimeArray). For Shader targets this path isn't taken,
+            // but handle RuntimeArray for completeness.
+            let element_type = match self.lookup_type(value_spirv_type) {
+                SpirvType::RuntimeArray { element } => element,
+                _ => value_spirv_type,
+            };
+
+            // Data variable: *CrossWorkgroup element_type.
+            // Use a pointer to the element type directly — OpenCL doesn't have
+            // RuntimeArray, buffers are just raw pointers to global memory.
+            let data_ptr_spirv_type = self.type_ptr_to(element_type);
+            let data_var = var_id.unwrap();
+            self.emit_global().variable(
+                data_ptr_spirv_type,
+                Some(data_var),
+                StorageClass::CrossWorkgroup,
+                None,
+            );
+            emit_kernel_param_pos(data_var, 0);
+            if let hir::PatKind::Binding(_, _, ident, _) = &hir_param.pat.kind {
+                self.emit_global().name(data_var, ident.to_string());
+            }
+
+            // Length variable: a second Input OpVariable for the slice length.
+            // The host sets this as a separate kernel argument.
+            let len_spirv_type = self.type_isize();
+            let len_ptr_spirv_type = self.type_ptr_to(len_spirv_type);
+            let len_var = self.emit_global().id();
+            self.emit_global().variable(
+                len_ptr_spirv_type,
+                Some(len_var),
+                StorageClass::Input,
+                None,
+            );
+            emit_kernel_param_pos(len_var, 1);
+            if let hir::PatKind::Binding(_, _, ident, _) = &hir_param.pat.kind {
+                self.emit_global().name(len_var, format!("{}.len", ident));
+            }
+
+            // Add both to entry point interface.
+            op_entry_point_interface_operands.push(data_var);
+            op_entry_point_interface_operands.push(len_var);
+
+            // Load length from Input variable.
+            let len_value = bx.load(
+                len_spirv_type,
+                len_var.with_type(len_ptr_spirv_type),
+                rustc_abi::Align::from_bytes((self.tcx.sess.target.pointer_width as u64) / 8)
+                    .unwrap(),
+            );
+
+            // Pass (pointer, length) pair. For Kernel targets, [T] is
+            // represented as element_type, so the pointer types match
+            // directly between the entry stub and the inner function.
+            call_args.extend([data_var.with_type(data_ptr_spirv_type), len_value]);
+            return;
+        }
+
         let var_ptr_spirv_type;
         let (value_ptr, value_len) = if needs_interface_block && !has_explicit_interface_block {
             let var_spirv_type = SpirvType::InterfaceBlock {
@@ -591,7 +853,7 @@ impl<'tcx> CodegenCx<'tcx> {
 
                 Some(len.with_type(len_spirv_type))
             } else {
-                if is_unsized {
+                if is_spirv_unsized {
                     // It's OK to use a RuntimeArray<u32> and not have a length parameter, but
                     // it's just nicer ergonomics to use a slice.
                     self.tcx
@@ -621,7 +883,7 @@ impl<'tcx> CodegenCx<'tcx> {
                         }
                     }
                     _ => {
-                        if is_unsized {
+                        if is_spirv_unsized {
                             self.tcx.dcx().span_err(
                                 hir_param.ty_span,
                                 "only RuntimeArray is supported, not other unsized types",
@@ -633,7 +895,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 // FIXME(eddyb) determine, based on the type, what kind of type
                 // this is, to narrow it further to e.g. "buffer in a non-buffer
                 // storage class" or "storage class expects fixed data sizes".
-                if is_unsized {
+                if is_spirv_unsized {
                     self.tcx.dcx().span_fatal(
                         hir_param.ty_span,
                         format!(
@@ -716,10 +978,13 @@ impl<'tcx> CodegenCx<'tcx> {
         // locations, but the "client API" Vulkan doesn't describe any use-case for them, or at least none I'm aware of.
         // A quick scour through the spec revealed that `VK_KHR_dynamic_rendering_local_read` may need this, and while
         // we don't support it yet (I assume), I'll just keep it here in case it becomes useful in the future.
-        let has_location = matches!(
-            storage_class,
-            Ok(StorageClass::Input | StorageClass::Output | StorageClass::UniformConstant)
-        );
+        // Location decorations require the Shader capability and are not valid
+        // for Kernel entry points. Skip them entirely for Kernel execution model.
+        let has_location = execution_model != ExecutionModel::Kernel
+            && matches!(
+                storage_class,
+                Ok(StorageClass::Input | StorageClass::Output | StorageClass::UniformConstant)
+            );
         let mut assign_location = |var_id: Result<Word, &str>, explicit: Option<u32>| {
             let storage_class = storage_class.unwrap();
             let location = decoration_locations
@@ -931,16 +1196,12 @@ impl<'tcx> CodegenCx<'tcx> {
             _ => false,
         };
         if let Some(attachment_index) = attrs.input_attachment_index {
-            if is_subpass_input && self.builder.has_capability(Capability::InputAttachment) {
+            if is_subpass_input {
                 self.emit_global().decorate(
                     var_id.unwrap(),
                     Decoration::InputAttachmentIndex,
                     std::iter::once(Operand::LiteralBit32(attachment_index.value)),
                 );
-            } else if is_subpass_input {
-                self.tcx
-                    .dcx()
-                    .span_err(hir_param.ty_span, "Missing capability InputAttachment");
             } else {
                 self.tcx.dcx().span_err(
                     attachment_index.span,
@@ -986,6 +1247,7 @@ impl<'tcx> CodegenCx<'tcx> {
                 // Emit the `OpVariable` with its *Result* ID set to `var_id`.
                 self.emit_global()
                     .variable(var_ptr_spirv_type, Some(var), storage_class, None);
+                emit_kernel_param_pos(var, 0);
 
                 // Record this `OpVariable` as needing to be added (if applicable),
                 // to the *Interface* operands of the `OpEntryPoint` instruction.

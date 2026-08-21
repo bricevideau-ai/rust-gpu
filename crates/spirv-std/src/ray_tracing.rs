@@ -149,6 +149,7 @@ bitflags::bitflags! {
     /// `CULL_BACK_FACING_TRIANGLES` and `CULL_FRONT_FACING_TRIANGLES` may
     /// be set.
     #[repr(transparent)]
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
     #[cfg_attr(feature = "bytemuck", derive(bytemuck::Zeroable, bytemuck::Pod))]
     pub struct RayFlags: u32 {
         /// No flags specified.
@@ -423,7 +424,11 @@ impl RayQuery {
                 result = out(reg) result,
             }
 
-            RayFlags::from_bits_truncate(result)
+            // NOTE: In bitflags 2.x `from_bits_truncate`'s default impl iterates `Flags::FLAGS` at
+            // runtime (via `all()`), which involves pointer arithmetic our backend doesn't support.
+            // `result` always comes straight from `OpRayQueryGetRayFlagsKHR`, so there are no
+            // unknown bits to truncate anyway.
+            RayFlags::from_bits_retain(result)
         }
     }
 

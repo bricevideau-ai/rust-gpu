@@ -1,5 +1,5 @@
 warning: the feature `ptr_internals` is internal to the compiler or standard library
-  --> $DIR/allocate_vec_like.rs:4:12
+  --> $DIR/allocate_vec_like.rs:6:12
    |
 LL | #![feature(ptr_internals)]
    |            ^^^^^^^^^^^^^

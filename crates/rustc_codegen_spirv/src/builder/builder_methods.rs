@@ -12,7 +12,7 @@ use crate::custom_insts::CustomInst;
 use crate::spirv_type::SpirvType;
 use itertools::Itertools;
 use rspirv::dr::{InsertPoint, Instruction, Operand};
-use rspirv::spirv::{Capability, MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word};
+use rspirv::spirv::{MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word};
 use rustc_abi::{Align, BackendRepr, Scalar, Size, WrappingRange};
 use rustc_apfloat::{Float, Round, Status, ieee};
 use rustc_codegen_ssa::MemFlags;
@@ -431,7 +431,16 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     .def(self),
                 _ => self.fatal(format!("memset on float width {width} not implemented yet")),
             },
-            SpirvType::Adt { .. } => self.fatal("memset on structs not implemented yet"),
+            SpirvType::Adt { field_types, .. } => {
+                let field_pats: Vec<_> = field_types
+                    .iter()
+                    .map(|&field_ty| {
+                        self.memset_const_pattern(&self.lookup_type(field_ty), fill_byte)
+                    })
+                    .collect();
+                self.constant_composite(ty.def(self.span(), self), field_pats.into_iter())
+                    .def(self)
+            }
             SpirvType::Vector { element, count, .. } | SpirvType::Matrix { element, count } => {
                 let elem_pat = self.memset_const_pattern(&self.lookup_type(element), fill_byte);
                 self.constant_composite(
@@ -485,7 +494,17 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 64 => memset_dynamic_scalar(self, fill_var, 8, true),
                 _ => self.fatal(format!("memset on float width {width} not implemented yet")),
             },
-            SpirvType::Adt { .. } => self.fatal("memset on structs not implemented yet"),
+            SpirvType::Adt { field_types, .. } => {
+                let field_pats: Vec<_> = field_types
+                    .iter()
+                    .map(|&field_ty| {
+                        self.memset_dynamic_pattern(&self.lookup_type(field_ty), fill_var)
+                    })
+                    .collect();
+                self.emit()
+                    .composite_construct(ty.def(self.span(), self), None, field_pats)
+                    .unwrap()
+            }
             SpirvType::Array { element, count } => {
                 let elem_pat = self.memset_dynamic_pattern(&self.lookup_type(element), fill_var);
                 let count = self.builder.lookup_const_scalar(count).unwrap() as usize;
@@ -591,13 +610,8 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
     }
 
     #[instrument(level = "trace", skip(self))]
-    fn zombie_ptr_equal(&self, def: Word, inst: &str) {
-        if !self.builder.has_capability(Capability::VariablePointers) {
-            self.zombie(
-                def,
-                &format!("{inst} without OpCapability VariablePointers"),
-            );
-        }
+    fn zombie_ptr_equal(&self, def: Word) {
+        self.zombie(def, "cannot check pointers for equality");
     }
 
     /// Convenience wrapper for `adjust_pointer_for_sized_access`, falling back
@@ -1002,16 +1016,46 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
             let mut merged_indices = original_indices;
 
             let last_index_id = merged_indices.last_mut().unwrap();
-            *last_index_id = self.add(last_index_id.with_type(index.ty), index).def(self);
+            // The original AccessChain index may have a different integer
+            // width than the new offset (e.g., u32 vs u64 on Physical64).
+            // Look up the original index's type from the module and insert
+            // a widening conversion if needed.
+            let original_id = *last_index_id;
+            let original_ty = {
+                let builder = self.emit();
+                let module = builder.module_ref();
+                module
+                    .types_global_values
+                    .iter()
+                    .chain(
+                        builder
+                            .selected_function()
+                            .and_then(|idx| module.functions.get(idx))
+                            .into_iter()
+                            .flat_map(|f| f.all_inst_iter()),
+                    )
+                    .find(|inst| inst.result_id == Some(original_id))
+                    .and_then(|inst| inst.result_type)
+                    .unwrap_or(index.ty)
+            };
+            let original_val = original_id.with_type(original_ty);
+            let widened = if original_ty != index.ty {
+                self.intcast(original_val, index.ty, false)
+            } else {
+                original_val
+            };
+            *last_index_id = self.add(widened, index).def(self);
 
             return self.emit_access_chain(ptr.ty, original_ptr, None, merged_indices, is_inbounds);
         }
 
-        // None of the legalizing strategies above applied, so this operation
-        // isn't really supported (and will error if actually used from a shader).
+        // None of the legalizing strategies above applied, so emit
+        // `OpPtrAccessChain` / `OpInBoundsPtrAccessChain` directly.
+        // This is legal in Physical addressing (Kernel/OpenCL) but not in
+        // Logical addressing (Shader), where we zombie the result.
         //
         // FIXME(eddyb) supersede via SPIR-T pointer legalization (e.g. `qptr`).
-        trace!("ptr_offset_strided: falling back to (illegal) `OpPtrAccessChain`");
+        trace!("ptr_offset_strided: falling back to `OpPtrAccessChain`");
 
         let result_ptr = if is_inbounds {
             self.emit()
@@ -1021,10 +1065,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 .ptr_access_chain(ptr.ty, None, ptr_id, index.def(self), vec![])
         }
         .unwrap();
-        self.zombie(
-            result_ptr,
-            "cannot offset a pointer to an arbitrary element",
-        );
+        if !self.builder.is_physical_addressing() {
+            self.zombie(
+                result_ptr,
+                "cannot offset a pointer to an arbitrary element",
+            );
+        }
         result_ptr.with_type(ptr.ty)
     }
 
@@ -1070,7 +1116,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 )
             }
             .unwrap();
-            self.zombie(result, "cannot offset a pointer to an arbitrary element");
+            // OpPtrAccessChain is valid in Physical addressing (Kernel/OpenCL)
+            // but not in Logical addressing (Shader).
+            if !self.builder.is_physical_addressing() {
+                self.zombie(result, "cannot offset a pointer to an arbitrary element");
+            }
             result
         } else {
             if is_inbounds {
@@ -2045,9 +2095,16 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
         // "first index" (which acts as `<*T>::offset` aka "pointer arithmetic").
         if let &[ptr_base_index, structured_index] = indices
             && self.builder.lookup_const_scalar(ptr_base_index) == Some(0)
-            && let SpirvType::Array { element, .. } | SpirvType::RuntimeArray { element, .. } =
-                self.lookup_type(ty)
         {
+            let element = match self.lookup_type(ty) {
+                SpirvType::Array { element, .. } | SpirvType::RuntimeArray { element, .. } => {
+                    element
+                }
+                // For Kernel targets, [T] is the element type directly (no
+                // RuntimeArray), so ty is already the element type.
+                _ if self.builder.is_kernel_mode() => ty,
+                _ => return self.maybe_inbounds_gep(ty, ptr, indices, true),
+            };
             return self.maybe_inbounds_gep(element, ptr, &[structured_index], true);
         }
 
@@ -2596,7 +2653,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                         self.emit()
                             .ptr_equal(b, None, lhs.def(self), rhs.def(self))
                             .inspect(|&result| {
-                                self.zombie_ptr_equal(result, "OpPtrEqual");
+                                self.zombie_ptr_equal(result);
                             })
                     } else {
                         let int_ty = self.type_usize();
@@ -2618,7 +2675,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
                         self.emit()
                             .ptr_not_equal(b, None, lhs.def(self), rhs.def(self))
                             .inspect(|&result| {
-                                self.zombie_ptr_equal(result, "OpPtrNotEqual");
+                                self.zombie_ptr_equal(result);
                             })
                     } else {
                         let int_ty = self.type_usize();

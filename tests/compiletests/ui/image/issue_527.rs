@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C target-feature=+StorageImageWriteWithoutFormat
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use glam::*;
 use spirv_std::spirv;

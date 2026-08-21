@@ -1,10 +1,14 @@
-mod ash;
+mod ash_runner;
 mod backend;
-mod wgpu;
+#[cfg(target_os = "linux")]
+mod opencl;
+mod wgpu_runner;
 
 pub use crate::scaffold::shader::*;
-pub use ash::AshBackend;
+pub use ash;
+pub use ash_runner::AshBackend;
 pub use backend::{BufferConfig, BufferUsage, ComputeBackend, ComputeShaderTest, ComputeTest};
-pub use wgpu::{
-    WgpuBackend, WgpuComputeTest, WgpuComputeTestMultiBuffer, WgpuComputeTestPushConstants,
-};
+#[cfg(target_os = "linux")]
+pub use opencl::{OpenClBackend, run_opencl_test, run_opencl_test_default};
+pub use wgpu;
+pub use wgpu_runner::WgpuComputeTest;

@@ -1,0 +1,62 @@
+               OpCapability Shader
+               OpCapability StorageBufferArrayDynamicIndexing
+               OpCapability RuntimeDescriptorArray
+               OpMemoryModel Logical Simple
+               OpEntryPoint Vertex %1 "main" %index %buffer %out
+               OpName %index "index"
+               OpName %buffer "buffer"
+               OpName %out "out"
+               OpDecorate %_runtimearr_u32 ArrayStride 4
+               OpDecorate %_struct_8 Block
+               OpMemberDecorate %_struct_8 0 Offset 0
+               OpDecorate %index Location 0
+               OpDecorate %buffer NonWritable
+               OpDecorate %buffer Binding 0
+               OpDecorate %buffer DescriptorSet 0
+               OpDecorate %out Location 0
+        %u32 = OpTypeInt 32 0
+%_ptr_Input_u32 = OpTypePointer Input %u32
+%_runtimearr_u32 = OpTypeRuntimeArray %u32
+  %_struct_8 = OpTypeStruct %_runtimearr_u32
+%_ptr_StorageBuffer__struct_8 = OpTypePointer StorageBuffer %_struct_8
+        %f32 = OpTypeFloat 32
+      %v4f32 = OpTypeVector %f32 4
+%_ptr_Output_v4f32 = OpTypePointer Output %v4f32
+       %void = OpTypeVoid
+         %16 = OpTypeFunction %void
+      %index = OpVariable %_ptr_Input_u32 Input
+%_ptr_StorageBuffer__runtimearr_u32 = OpTypePointer StorageBuffer %_runtimearr_u32
+     %buffer = OpVariable %_ptr_StorageBuffer__struct_8 StorageBuffer
+      %u32_0 = OpConstant %u32 0
+     %u32_16 = OpConstant %u32 16
+      %u32_2 = OpConstant %u32 2
+%_ptr_StorageBuffer_u32 = OpTypePointer StorageBuffer %u32
+      %u32_1 = OpConstant %u32 1
+      %u32_3 = OpConstant %u32 3
+        %out = OpVariable %_ptr_Output_v4f32 Output
+          %1 = OpFunction %void None %16
+         %24 = OpLabel
+         %25 = OpLoad %u32 %index
+         %26 = OpInBoundsAccessChain %_ptr_StorageBuffer__runtimearr_u32 %buffer %u32_0
+         %27 = OpIMul %u32 %25 %u32_16
+         %28 = OpShiftRightLogical %u32 %27 %u32_2
+         %29 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %26 %28
+         %30 = OpLoad %u32 %29
+         %31 = OpBitcast %f32 %30
+         %32 = OpIAdd %u32 %28 %u32_1
+         %33 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %26 %32
+         %34 = OpLoad %u32 %33
+         %35 = OpBitcast %f32 %34
+         %36 = OpIAdd %u32 %28 %u32_2
+         %37 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %26 %36
+         %38 = OpLoad %u32 %37
+         %39 = OpBitcast %f32 %38
+         %40 = OpIAdd %u32 %28 %u32_3
+         %41 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %26 %40
+         %42 = OpLoad %u32 %41
+         %43 = OpBitcast %f32 %42
+         %44 = OpCompositeConstruct %v4f32 %31 %35 %39 %43
+               OpStore %out %44
+               OpNoLine
+               OpReturn
+               OpFunctionEnd

@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Tests that `asm!` can infer the result type of `OpAccessChain`,
 // when used to index slices.
 

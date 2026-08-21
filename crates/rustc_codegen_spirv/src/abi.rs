@@ -4,7 +4,7 @@
 use crate::attr::{AggregatedSpirvAttributes, IntrinsicType};
 use crate::codegen_cx::CodegenCx;
 use crate::maybe_pqp_cg_ssa::traits::ConstCodegenMethods as _;
-use crate::spirv_type::SpirvType;
+use crate::spirv_type::{SpirvType, name_type_id};
 use itertools::Itertools;
 use rspirv::spirv::{Dim, ImageFormat, StorageClass, Word};
 use rustc_abi::ExternAbi as Abi;
@@ -322,6 +322,33 @@ impl<'tcx> ConvSpirvType<'tcx> for FnAbi<'tcx, Ty<'tcx>> {
     }
 }
 
+/// If `layout` has exactly one non-ZST field positioned at offset 0 with size and
+/// alignment matching the outer layout, returns that field.
+///
+/// This captures the structural shape of a "newtype wrapper" — a single meaningful
+/// field padded out to the outer type, which can be substituted for the outer type
+/// in a SPIR-V type graph as long as the caller has *independently* verified that
+/// the ABIs match (either via `BackendRepr::eq_up_to_validity`, or via
+/// `#[repr(transparent)]`, which guarantees full ABI identity by construction).
+fn sole_structural_newtype_field<'tcx>(
+    cx: &CodegenCx<'tcx>,
+    layout: TyAndLayout<'tcx>,
+) -> Option<TyAndLayout<'tcx>> {
+    let mut non_zst = (0..layout.fields.count()).filter(|&i| !layout.field(cx, i).is_zst());
+    let i = non_zst.next()?;
+    if non_zst.next().is_some() {
+        return None;
+    }
+    let field = layout.field(cx, i);
+    // Only unpack a newtype if the field and the newtype line up
+    // perfectly, in every way that could potentially affect ABI.
+    (layout.fields.offset(i) == Size::ZERO
+        && field.size == layout.size
+        && field.align.abi == layout.align.abi
+        && field.backend_repr.eq_up_to_validity(&layout.backend_repr))
+    .then_some(field)
+}
+
 impl<'tcx> ConvSpirvType<'tcx> for TyAndLayout<'tcx> {
     fn spirv_type(&self, mut span: Span, cx: &CodegenCx<'tcx>) -> Word {
         if let TyKind::Adt(adt, args) = *self.ty.kind() {
@@ -380,23 +407,8 @@ impl<'tcx> ConvSpirvType<'tcx> for TyAndLayout<'tcx> {
                 //      a new one, offering the `(a, b)` shape `rustc_codegen_ssa`
                 //      expects, while letting noop pointercasts access the sole
                 //      `BackendRepr::ScalarPair` field - this is the approach taken here
-                let mut non_zst_fields = (0..self.fields.count())
-                    .map(|i| (i, self.field(cx, i)))
-                    .filter(|(_, field)| !field.is_zst());
-                let sole_non_zst_field = match (non_zst_fields.next(), non_zst_fields.next()) {
-                    (Some(field), None) => Some(field),
-                    _ => None,
-                };
-                if let Some((i, field)) = sole_non_zst_field {
-                    // Only unpack a newtype if the field and the newtype line up
-                    // perfectly, in every way that could potentially affect ABI.
-                    if self.fields.offset(i) == Size::ZERO
-                        && field.size == self.size
-                        && field.align.abi == self.align.abi
-                        && field.backend_repr.eq_up_to_validity(&self.backend_repr)
-                    {
-                        return field.spirv_type(span, cx);
-                    }
+                if let Some(field) = sole_structural_newtype_field(cx, *self) {
+                    return field.spirv_type(span, cx);
                 }
 
                 // Note: We can't use auto_struct_layout here because the spirv types here might be undefined due to
@@ -448,7 +460,24 @@ impl<'tcx> ConvSpirvType<'tcx> for TyAndLayout<'tcx> {
                 .tcx
                 .dcx()
                 .fatal("scalable vectors are not supported in SPIR-V backend"),
-            BackendRepr::Memory { sized: _ } => trans_aggregate(cx, span, *self),
+            BackendRepr::Memory { sized: _ } => {
+                // For `#[repr(transparent)]` newtypes, reuse the single non-ZST
+                // field's SPIR-V type directly instead of wrapping it in an
+                // `OpTypeStruct`, if the type is `#[repr(transparent)]`.
+                // Otherwise, we're manipulating the abi too much and the
+                // format args decompiler fails.
+                if let TyKind::Adt(adt, _) = self.ty.kind()
+                    && adt.repr().transparent()
+                    && let Some(field) = sole_structural_newtype_field(cx, *self)
+                {
+                    let inner_id = field.spirv_type(span, cx);
+                    // Preserve the wrapper's name as an `OpName` alias on the
+                    // inner SPIR-V type so disassembly still shows it.
+                    name_type_id(cx, inner_id, TyLayoutNameKey::from(*self));
+                    return inner_id;
+                }
+                trans_aggregate(cx, span, *self)
+            }
         }
     }
 }
@@ -645,10 +674,18 @@ fn trans_aggregate<'tcx>(cx: &CodegenCx<'tcx>, span: Span, ty: TyAndLayout<'tcx>
                 // There's a potential for this array to be sized, but the element to be unsized, e.g. `[[u8]; 5]`.
                 // However, I think rust disallows all these cases, so assert this here.
                 assert_eq!(count, 0);
-                SpirvType::RuntimeArray {
-                    element: element_type,
+                if cx.builder.is_kernel_mode() {
+                    // For Kernel targets (Physical64 addressing), [T] is just the
+                    // element type — OpTypeRuntimeArray requires the Shader
+                    // capability. Pointers to [T] become pointers to T, and array
+                    // indexing is pointer arithmetic.
+                    element_type
+                } else {
+                    SpirvType::RuntimeArray {
+                        element: element_type,
+                    }
+                    .def(span, cx)
                 }
-                .def(span, cx)
             } else if count == 0 {
                 // spir-v doesn't support zero-sized arrays
                 create_zst(cx, span, ty)
@@ -998,6 +1035,27 @@ fn trans_intrinsic_type<'tcx>(
             let sampled = const_int_value(cx, args.const_at(5))?;
             let image_format = const_int_value(cx, args.const_at(6))?;
 
+            // OpenCL SPIR-V environment requires:
+            // - Sampled Type must be OpTypeVoid
+            // - Depth must be 0 (not a depth image)
+            // - Sampled must be 0 (Unknown)
+            // - AccessQualifier must be present
+            // The qualifier varies per parameter (ReadOnly / WriteOnly /
+            // ReadWrite), determined in codegen_cx::entry from Rust mutability
+            // and capabilities by re-interning the Image type. The default set
+            // here is ReadOnly so the base OpTypeImage is valid SPIR-V even
+            // when no parameter ever references it.
+            let (sampled_type, depth, sampled, access_qualifier) = if cx.builder.is_kernel_mode() {
+                (
+                    SpirvType::Void.def(span, cx),
+                    0,
+                    0,
+                    Some(rspirv::spirv::AccessQualifier::ReadOnly),
+                )
+            } else {
+                (sampled_type, depth, sampled, None)
+            };
+
             let ty = SpirvType::Image {
                 sampled_type,
                 dim,
@@ -1006,6 +1064,7 @@ fn trans_intrinsic_type<'tcx>(
                 multisampled,
                 sampled,
                 image_format,
+                access_qualifier,
             };
             Ok(ty.def(span, cx))
         }
@@ -1126,7 +1185,9 @@ fn trans_intrinsic_type<'tcx>(
         IntrinsicType::Matrix => {
             let span = span_for_spirv_type_adt(cx, ty).unwrap();
             let err_attr_name = "`#[spirv(matrix)]`";
-            let (element, count) = trans_glam_like_struct(cx, span, ty, args, err_attr_name)?;
+            // SPIR-V `OpTypeMatrix` allows column counts 2, 3, and 4 only.
+            let (element, count) =
+                trans_glam_like_struct(cx, span, ty, args, err_attr_name, &[2, 3, 4])?;
             match cx.lookup_type(element) {
                 SpirvType::Vector { .. } => (),
                 ty => {
@@ -1146,7 +1207,16 @@ fn trans_intrinsic_type<'tcx>(
         IntrinsicType::Vector => {
             let span = span_for_spirv_type_adt(cx, ty).unwrap();
             let err_attr_name = "`#[spirv(vector)]`";
-            let (element, count) = trans_glam_like_struct(cx, span, ty, args, err_attr_name)?;
+            // SPIR-V `OpTypeVector` allows component counts 2, 3, 4, 8, and 16.
+            // Counts 8 and 16 require the `Vector16` capability, which is
+            // auto-enabled on Kernel targets — Vulkan/shader targets stay at 4.
+            let allowed: &[u32] = if cx.builder.is_kernel_mode() {
+                &[2, 3, 4, 8, 16]
+            } else {
+                &[2, 3, 4]
+            };
+            let (element, count) =
+                trans_glam_like_struct(cx, span, ty, args, err_attr_name, allowed)?;
             match cx.lookup_type(element) {
                 SpirvType::Bool | SpirvType::Float { .. } | SpirvType::Integer { .. } => (),
                 ty => {
@@ -1174,6 +1244,23 @@ fn trans_intrinsic_type<'tcx>(
     }
 }
 
+/// Formats `[2, 3, 4]` as `"2, 3 or 4"` and `[2, 3, 4, 8, 16]` as
+/// `"2, 3, 4, 8 or 16"` for diagnostic messages.
+fn format_allowed_counts(counts: &[u32]) -> String {
+    match counts {
+        [] => String::new(),
+        [single] => single.to_string(),
+        [head @ .., last] => {
+            let head = head
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{head} or {last}")
+        }
+    }
+}
+
 /// A struct with multiple fields of the same kind.
 /// Used for `#[spirv(vector)]` and `#[spirv(matrix)]`.
 fn trans_glam_like_struct<'tcx>(
@@ -1182,6 +1269,7 @@ fn trans_glam_like_struct<'tcx>(
     ty: TyAndLayout<'tcx>,
     args: GenericArgsRef<'tcx>,
     err_attr_name: &str,
+    allowed_counts: &[u32],
 ) -> Result<(Word, u32), ErrorGuaranteed> {
     let tcx = cx.tcx;
     if let Some(adt) = ty.ty.ty_adt_def()
@@ -1205,10 +1293,11 @@ fn trans_glam_like_struct<'tcx>(
         let element_word = element.spirv_type(span, cx);
         let count = u32::try_from(count)
             .ok()
-            .filter(|count| 2 <= *count && *count <= 4)
+            .filter(|c| allowed_counts.contains(c))
             .ok_or_else(|| {
+                let allowed = format_allowed_counts(allowed_counts);
                 tcx.dcx()
-                    .span_err(span, format!("{err_attr_name} must have 2, 3 or 4 members"))
+                    .span_err(span, format!("{err_attr_name} must have {allowed} members"))
             })?;
 
         for i in 0..ty.fields.count() {

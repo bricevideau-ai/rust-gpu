@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "issue_615"]
 
 // Tests that fallible integer conversions through `TryFrom`/`Result` can be

@@ -15,12 +15,11 @@ use rspirv::{binary::Assemble, binary::Disassemble};
 use rustc_abi::Size;
 use rustc_arena::DroplessArena;
 use rustc_codegen_ssa::traits::ConstCodegenMethods as _;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::bug;
 use rustc_middle::mir::interpret::ConstAllocation;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::SourceMap;
-use rustc_span::symbol::Symbol;
 use rustc_span::{DUMMY_SP, SourceFile, Span};
 use std::assert_matches;
 use std::cell::{RefCell, RefMut};
@@ -192,17 +191,21 @@ impl SpirvValue {
                 original_ptr_ty,
                 bitcast_result_id,
             } => {
-                cx.zombie_with_span(
-                    bitcast_result_id,
-                    span,
-                    &format!(
-                        "cannot cast between pointer types\
-                         \nfrom `{}`\
-                         \n  to `{}`",
-                        cx.debug_type(original_ptr_ty),
-                        cx.debug_type(self.ty)
-                    ),
-                );
+                // Pointer casts are invalid in Logical addressing (Shader)
+                // but valid in Physical addressing (Kernel/OpenCL) via OpBitcast.
+                if !cx.builder.is_physical_addressing() {
+                    cx.zombie_with_span(
+                        bitcast_result_id,
+                        span,
+                        &format!(
+                            "cannot cast between pointer types\
+                             \nfrom `{}`\
+                             \n  to `{}`",
+                            cx.debug_type(original_ptr_ty),
+                            cx.debug_type(self.ty)
+                        ),
+                    );
+                }
 
                 bitcast_result_id
             }
@@ -443,7 +446,58 @@ pub struct BuilderSpirv<'tcx> {
 
     debug_file_cache: RefCell<FxHashMap<DebugFileKey, DebugFileSpirv<'tcx>>>,
 
-    enabled_capabilities: FxHashSet<Capability>,
+    /// Whether this module targets an `OpenCL` Kernel environment, derived from
+    /// the target's memory model rather than the declared capability set.
+    kernel_mode: bool,
+    /// Whether the module uses a Physical addressing model (raw pointer
+    /// arithmetic and pointer bitcasts are legal), as opposed to Logical.
+    physical_addressing: bool,
+}
+
+/// Validate that a capability is allowed by the `OpenCL` SPIR-V environment specification.
+/// Reference: <https://registry.khronos.org/OpenCL/specs/3.0-unified/html/OpenCL_Env.html>
+fn validate_opencl_capability(cap: Capability, target: &SpirvTarget, tcx: TyCtxt<'_>) {
+    let allowed = match cap {
+        // Allowed for any OpenCL target: mandatory capabilities, device-dependent
+        // floating-point, and image capabilities.
+        Capability::Addresses
+        | Capability::Float16Buffer
+        | Capability::Int8
+        | Capability::Int16
+        | Capability::Int64
+        | Capability::Kernel
+        | Capability::Linkage
+        | Capability::Vector16
+        | Capability::Float16
+        | Capability::Float64
+        | Capability::ImageBasic
+        | Capability::LiteralSampler
+        | Capability::Sampled1D
+        | Capability::Image1D
+        | Capability::SampledBuffer
+        | Capability::ImageBuffer
+        | Capability::BitInstructions => true,
+
+        // OpenCL 2.0+ capabilities (device-dependent).
+        Capability::DeviceEnqueue
+        | Capability::GenericPointer
+        | Capability::Groups
+        | Capability::Pipes
+        | Capability::ImageReadWrite => target.is_opencl_2_0_or_later(),
+
+        // OpenCL 2.2+ capabilities (SPIR-V 1.1+).
+        Capability::SubgroupDispatch | Capability::PipeStorage => target.is_opencl_2_2_or_later(),
+
+        // Everything else is not part of the OpenCL SPIR-V environment.
+        _ => false,
+    };
+
+    if !allowed {
+        let target_env = target.to_spirv_tools();
+        tcx.dcx().err(format!(
+            "capability `{cap:?}` is not allowed by the `{target_env:?}` environment specification"
+        ));
+    }
 }
 
 impl<'tcx> BuilderSpirv<'tcx> {
@@ -460,51 +514,49 @@ impl<'tcx> BuilderSpirv<'tcx> {
         builder.set_version(version.0, version.1);
         builder.module_mut().header.as_mut().unwrap().generator = 0x001B_0000;
 
-        let mut enabled_capabilities = FxHashSet::default();
-
-        fn add_cap(
-            builder: &mut Builder,
-            enabled_capabilities: &mut FxHashSet<Capability>,
-            cap: Capability,
-        ) {
-            // This should be the only callsite of Builder::capability (aside from tests), to make
-            // sure the hashset stays in sync.
-            builder.capability(cap);
-            enabled_capabilities.insert(cap);
-        }
-        fn add_ext(builder: &mut Builder, ext: Symbol) {
-            // This should be the only callsite of Builder::extension (aside from tests), to make
-            // sure the hashset stays in sync.
-            builder.extension(ext.as_str());
-        }
-
         for feature in features {
             match *feature {
                 TargetFeature::Capability(cap) => {
-                    add_cap(&mut builder, &mut enabled_capabilities, cap);
+                    if target.is_opencl() {
+                        validate_opencl_capability(cap, target, tcx);
+                    }
+                    builder.capability(cap);
                 }
                 TargetFeature::Extension(ext) => {
-                    add_ext(&mut builder, ext);
+                    builder.extension(ext.as_str());
                 }
             }
         }
 
-        add_cap(&mut builder, &mut enabled_capabilities, Capability::Shader);
-        if memory_model == MemoryModel::Vulkan {
-            if version < SpirvVersion::V1_5 {
-                add_ext(&mut builder, sym.spv_khr_vulkan_memory_model);
+        if memory_model == MemoryModel::OpenCL {
+            // Mandatory capabilities per the OpenCL SPIR-V Environment Specification
+            // (Section 3: Required Capabilities). These must be supported by all
+            // OpenCL implementations and are always declared.
+            builder.capability(Capability::Addresses);
+            builder.capability(Capability::Float16Buffer);
+            builder.capability(Capability::Int8);
+            builder.capability(Capability::Int16);
+            builder.capability(Capability::Int64);
+            builder.capability(Capability::Kernel);
+            builder.capability(Capability::Vector16);
+        } else {
+            builder.capability(Capability::Shader);
+            if memory_model == MemoryModel::Vulkan {
+                if version < SpirvVersion::V1_5 {
+                    builder.extension(sym.spv_khr_vulkan_memory_model.as_str());
+                }
+                builder.capability(Capability::VulkanMemoryModel);
             }
-            add_cap(
-                &mut builder,
-                &mut enabled_capabilities,
-                Capability::VulkanMemoryModel,
-            );
         }
-
         // The linker will always be ran on this module
-        add_cap(&mut builder, &mut enabled_capabilities, Capability::Linkage);
+        builder.capability(Capability::Linkage);
 
-        builder.memory_model(AddressingModel::Logical, memory_model);
+        let addressing_model = if memory_model == MemoryModel::OpenCL {
+            AddressingModel::Physical64
+        } else {
+            AddressingModel::Logical
+        };
+        builder.memory_model(addressing_model, memory_model);
 
         Self {
             source_map: tcx.sess.source_map(),
@@ -513,7 +565,8 @@ impl<'tcx> BuilderSpirv<'tcx> {
             const_to_id: Default::default(),
             id_to_const: Default::default(),
             debug_file_cache: Default::default(),
-            enabled_capabilities,
+            kernel_mode: memory_model == MemoryModel::OpenCL,
+            physical_addressing: addressing_model == AddressingModel::Physical64,
         }
     }
 
@@ -534,8 +587,39 @@ impl<'tcx> BuilderSpirv<'tcx> {
             .unwrap();
     }
 
-    pub fn has_capability(&self, capability: Capability) -> bool {
-        self.enabled_capabilities.contains(&capability)
+    /// Declare `capability` on the module if it is not already declared.
+    ///
+    /// Deduplicates against the module's own `OpCapability` list, so there is
+    /// no shadow state to keep in sync with what post-link passes may prune.
+    pub fn require_capability(&self, capability: Capability) {
+        let mut builder = self.builder.borrow_mut();
+        let already_declared = builder
+            .module_ref()
+            .capabilities
+            .iter()
+            .any(|inst| inst.operands[0].unwrap_capability() == capability);
+        if !already_declared {
+            builder.capability(capability);
+        }
+    }
+
+    pub fn require_extension(&self, ext: &str) {
+        self.builder.borrow_mut().extension(ext);
+    }
+
+    /// Whether codegen targets an `OpenCL` Kernel environment (as opposed to a
+    /// Shader environment). Derived from the target's memory model, so it does
+    /// not depend on which capabilities have been declared.
+    pub fn is_kernel_mode(&self) -> bool {
+        self.kernel_mode
+    }
+
+    /// Whether the target's addressing model is Physical (`Physical64` on
+    /// `OpenCL` targets): raw pointer arithmetic like `OpPtrAccessChain` and
+    /// pointer `OpBitcast` are legal. Under `Logical` addressing they must be
+    /// zombied instead.
+    pub fn is_physical_addressing(&self) -> bool {
+        self.physical_addressing
     }
 
     /// See comment on `BuilderCursor`
@@ -727,7 +811,16 @@ impl<'tcx> BuilderSpirv<'tcx> {
             SpirvConst::Composite(v) => builder.constant_composite(ty, v.iter().copied()),
 
             SpirvConst::PtrTo { pointee } => {
-                builder.variable(ty, None, StorageClass::Private, Some(pointee))
+                // For Kernel (OpenCL) targets, use UniformConstant instead of
+                // Private — Private requires the Shader capability, while
+                // UniformConstant is valid for read-only globals in the Kernel
+                // execution model.
+                let storage_class = if self.is_kernel_mode() {
+                    StorageClass::UniformConstant
+                } else {
+                    StorageClass::Private
+                };
+                builder.variable(ty, None, storage_class, Some(pointee))
             }
         };
         #[allow(clippy::match_same_arms)]

@@ -1,7 +1,5 @@
 use difftest::config::Config;
-use difftest::scaffold::compute::{
-    BufferConfig, BufferUsage, WgpuComputeTestMultiBuffer, WgslComputeShader,
-};
+use difftest::scaffold::compute::{BufferConfig, BufferUsage, WgpuComputeTest, WgslComputeShader};
 
 fn main() {
     let config = Config::from_path(std::env::args().nth(1).unwrap()).unwrap();
@@ -36,15 +34,17 @@ fn main() {
             size: 128, // 32 f32 values
             usage: BufferUsage::StorageReadOnly,
             initial_data: Some(input_bytes),
+            element_size: 1,
         },
         BufferConfig {
             size: 2688, // 672 f32 values (32 threads * 21 outputs each)
             usage: BufferUsage::Storage,
             initial_data: None,
+            element_size: 1,
         },
     ];
 
-    let test = WgpuComputeTestMultiBuffer::new(
+    let test = WgpuComputeTest::new(
         WgslComputeShader::default(),
         [1, 1, 1], // Single workgroup with 32 threads
         buffers,

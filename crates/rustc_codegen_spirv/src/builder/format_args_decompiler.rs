@@ -1160,10 +1160,13 @@ impl<'a, 'tcx> CodegenPanic<'a, 'tcx> for DecodedFormatArgs<'tcx> {
                         let debug_printf_fmt = match (spec, scalar) {
                             // FIXME(eddyb) support more of these,
                             // potentially recursing to print ADTs.
-                            (' ' | '?', Some(Int(I32, false))) => "%u",
-                            ('x', Some(Int(I32, false))) => "%x",
-                            (' ' | '?', Some(Int(I32, true))) => "%i",
-                            (' ' | '?', Some(Float(F32))) => "%f",
+                            (' ' | '?', Some(Int(I8 | I16 | I32, false))) => "%u",
+                            (' ' | '?', Some(Int(I8 | I16 | I32, true))) => "%d",
+                            ('x', Some(Int(I8 | I16 | I32, false))) => "%x",
+                            (' ' | '?', Some(Int(I64, false))) => "%lu",
+                            (' ' | '?', Some(Int(I64, true))) => "%ld",
+                            ('x', Some(Int(I64, false))) => "%lx",
+                            (' ' | '?', Some(Float(F32 | F64))) => "%f",
 
                             _ => "",
                         };

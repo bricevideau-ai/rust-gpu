@@ -16,6 +16,7 @@ use crate::maybe_pqp_cg_ssa as rustc_codegen_ssa;
 
 use crate::target::SpirvTarget;
 use itertools::Itertools as _;
+use rspirv::binary::Assemble;
 use rspirv::dr::{Module, Operand};
 use rspirv::spirv::{Decoration, LinkageType, Word};
 use rustc_abi::{AddressSpace, HasDataLayout, TargetDataLayout};
@@ -747,10 +748,27 @@ impl CodegenArgs {
             remap.len() as u32 + 1
         }
 
-        use rspirv::binary::Disassemble;
+        fn dis(insts: &impl Assemble) -> String {
+            use rspirv2::core::inst_set::CoreInstSet;
+            use rspirv2::dis::DisOptions;
+            use rspirv2::module::Module;
+            use rspirv2::operand::LiteralStringEscape;
+
+            let words = insts.assemble();
+            match Module::<CoreInstSet>::from_words_maybe_header(bytemuck::cast_slice(&words)) {
+                Ok(module) => module
+                    .dis(DisOptions {
+                        color: false,
+                        literal_string_escape: LiteralStringEscape::EscapeNewlines,
+                        ..DisOptions::default()
+                    })
+                    .to_string(),
+                Err(err) => format!("rspirv2 parsing failed: {err}"),
+            }
+        }
 
         if self.disassemble {
-            eprintln!("{}", module.disassemble());
+            eprint!("{}", dis(module));
         }
 
         if let Some(func) = &self.disassemble_fn {
@@ -765,7 +783,7 @@ impl CodegenArgs {
                     panic!(
                         "no function with the name `{}` found in:\n{}\n",
                         func,
-                        module.disassemble()
+                        dis(module)
                     )
                 })
                 .operands[0]
@@ -778,7 +796,7 @@ impl CodegenArgs {
                 .clone();
             // Compact to make IDs more stable
             compact_ids(&mut func);
-            eprintln!("{}", func.disassemble());
+            eprint!("{}", dis(&func));
         }
 
         if let Some(entry) = &self.disassemble_entry {
@@ -791,7 +809,7 @@ impl CodegenArgs {
                     panic!(
                         "no entry point with the name `{}` found in:\n{}\n",
                         entry,
-                        module.disassemble()
+                        dis(module)
                     )
                 })
                 .operands[1]
@@ -804,13 +822,16 @@ impl CodegenArgs {
                 .clone();
             // Compact to make IDs more stable
             compact_ids(&mut func);
-            eprintln!("{}", func.disassemble());
+            eprint!("{}", dis(&func));
         }
 
         if self.disassemble_globals {
-            for inst in module.global_inst_iter() {
-                eprintln!("{}", inst.disassemble());
-            }
+            let globals = Module {
+                header: None,
+                functions: Vec::new(),
+                ..module.clone()
+            };
+            eprint!("{}", dis(&globals));
         }
     }
 }

@@ -1,5 +1,7 @@
 // Simple single entrypoint function test.
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 

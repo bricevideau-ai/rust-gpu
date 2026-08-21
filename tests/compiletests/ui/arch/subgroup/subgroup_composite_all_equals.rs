@@ -1,7 +1,9 @@
 // build-pass
 // compile-flags: -C target-feature=+GroupNonUniform,+GroupNonUniformVote,+ext:SPV_KHR_vulkan_memory_model
 // compile-flags: -C llvm-args=--disassemble-fn=subgroup_composite_all_equals::disassembly
-// normalize-stderr-test "OpLine .*\n" -> ""
+// normalize-stderr-test "\n\W*OpLine .*" -> ""
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use glam::*;
 use spirv_std::ScalarComposite;

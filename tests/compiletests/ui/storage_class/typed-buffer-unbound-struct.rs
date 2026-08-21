@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -C target-feature=+RuntimeDescriptorArray,+ext:SPV_EXT_descriptor_indexing
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 // Tests the more complex `TypedBuffer` case, where the size of each buffer in the binding is unbound, and also the data type is a struct.
 

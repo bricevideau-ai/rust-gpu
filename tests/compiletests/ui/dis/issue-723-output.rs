@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "issue_723_output"]
 
 // Test that interface (global) `OpVariable`s mentioned by `OpEntryPoint` don't
@@ -14,9 +16,9 @@
 
 // build-pass
 // compile-flags: -C debuginfo=0 -C llvm-args=--disassemble-globals
-// normalize-stderr-test "OpCapability VulkanMemoryModel\n" -> ""
-// normalize-stderr-test "OpSource .*\n" -> ""
-// normalize-stderr-test "OpExtension .SPV_KHR_vulkan_memory_model.\n" -> ""
+// normalize-stderr-test "\n\W*OpCapability VulkanMemoryModel" -> ""
+// normalize-stderr-test "\n\W*OpSource .*" -> ""
+// normalize-stderr-test "\n\W*OpExtension .SPV_KHR_vulkan_memory_model." -> ""
 // normalize-stderr-test "OpMemoryModel Logical Vulkan" -> "OpMemoryModel Logical Simple"
 
 // HACK(eddyb) `compiletest` handles `ui\dis\`, but not `ui\\dis\\`, on Windows.

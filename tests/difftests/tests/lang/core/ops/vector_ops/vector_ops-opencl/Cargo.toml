@@ -1,0 +1,16 @@
+[package]
+name = "vector_ops-opencl"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+# Common deps (difftest is pulled in for the `compat_round!` macro used in
+# the SPIR-V side too).
+[dependencies]
+spirv-std.workspace = true
+difftest.workspace = true
+
+# CPU deps
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+bytemuck.workspace = true

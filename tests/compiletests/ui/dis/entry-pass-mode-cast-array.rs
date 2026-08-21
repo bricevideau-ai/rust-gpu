@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // This is a similar setup to the `issue-731` test, but instead of "just" the
 // missing copy out of the global (`Input`) `OpVariable`, small enough types
 // would fail much earlier (by generating unsupported pointer casts).

@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test that `Float::powi` uses GLSL.std.450 Pow instead of a loop-based implementation.
 // See https://github.com/Rust-GPU/rust-gpu/issues/516
 

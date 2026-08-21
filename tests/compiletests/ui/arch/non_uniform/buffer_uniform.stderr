@@ -1,0 +1,41 @@
+               OpCapability Shader
+               OpCapability StorageBufferArrayDynamicIndexing
+               OpCapability RuntimeDescriptorArray
+               OpMemoryModel Logical Simple
+               OpEntryPoint Vertex %1 "main" %index %buffers %out
+               OpName %index "index"
+               OpName %buffers "buffers"
+               OpName %out "out"
+               OpDecorate %_struct_8 Block
+               OpMemberDecorate %_struct_8 0 Offset 0
+               OpDecorate %index Location 0
+               OpDecorate %buffers NonWritable
+               OpDecorate %buffers Binding 0
+               OpDecorate %buffers DescriptorSet 0
+               OpDecorate %out Location 0
+        %u32 = OpTypeInt 32 0
+%_ptr_Input_u32 = OpTypePointer Input %u32
+        %f32 = OpTypeFloat 32
+      %v4f32 = OpTypeVector %f32 4
+  %_struct_8 = OpTypeStruct %v4f32
+%_runtimearr__struct_8 = OpTypeRuntimeArray %_struct_8
+%_ptr_StorageBuffer__runtimearr__struct_8 = OpTypePointer StorageBuffer %_runtimearr__struct_8
+%_ptr_Output_v4f32 = OpTypePointer Output %v4f32
+       %void = OpTypeVoid
+         %17 = OpTypeFunction %void
+      %index = OpVariable %_ptr_Input_u32 Input
+%_ptr_StorageBuffer__struct_8 = OpTypePointer StorageBuffer %_struct_8
+    %buffers = OpVariable %_ptr_StorageBuffer__runtimearr__struct_8 StorageBuffer
+%_ptr_StorageBuffer_v4f32 = OpTypePointer StorageBuffer %v4f32
+      %u32_0 = OpConstant %u32 0
+        %out = OpVariable %_ptr_Output_v4f32 Output
+          %1 = OpFunction %void None %17
+         %21 = OpLabel
+         %22 = OpLoad %u32 %index
+         %23 = OpAccessChain %_ptr_StorageBuffer__struct_8 %buffers %22
+         %24 = OpAccessChain %_ptr_StorageBuffer_v4f32 %23 %u32_0
+         %25 = OpLoad %v4f32 %24
+               OpStore %out %25
+               OpNoLine
+               OpReturn
+               OpFunctionEnd
