@@ -163,15 +163,38 @@ pub fn sort_globals(module: &mut Module) {
 }
 
 pub fn name_variables_pass(module: &mut Module) {
-    let variables = module
+    let mut keep_named: FxHashSet<Word> = module
         .types_global_values
         .iter()
         .filter(|inst| inst.class.opcode == Op::Variable)
         .map(|inst| inst.result_id.unwrap())
-        .collect::<FxHashSet<Word>>();
+        .collect();
+    // OpenCL Kernel entry points expose their interface as `OpFunctionParameter`
+    // (after the `kernel_arguments` linker pass converts global `OpVariable`s to
+    // function parameters). Preserve `OpName`s on those too, so reflection APIs
+    // like `clGetKernelArgInfo` can recover argument names. We only consider
+    // entry-point function parameters (not internal helper functions') to keep
+    // the set of preserved names focused on the public interface.
+    let entry_point_func_ids: FxHashSet<Word> = module
+        .entry_points
+        .iter()
+        .filter_map(|ep| ep.operands.get(1).and_then(|op| op.id_ref_any()))
+        .collect();
+    for func in &module.functions {
+        if let Some(def) = &func.def
+            && let Some(func_id) = def.result_id
+            && entry_point_func_ids.contains(&func_id)
+        {
+            for param in &func.parameters {
+                if let Some(id) = param.result_id {
+                    keep_named.insert(id);
+                }
+            }
+        }
+    }
     module
         .debug_names
-        .retain(|inst| variables.contains(&inst.operands[0].unwrap_id_ref()));
+        .retain(|inst| keep_named.contains(&inst.operands[0].unwrap_id_ref()));
     // FIXME(eddyb) why does this remove `OpLine` instructions?
     module
         .types_global_values

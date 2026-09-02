@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "issue_1062"]
 
 // Test that rotates take the correct path for non-zero bit amounts.

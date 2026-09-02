@@ -1,0 +1,34 @@
+               OpCapability Addresses
+               OpCapability Kernel
+               OpCapability Vector16
+               OpCapability Float16Buffer
+               OpCapability Int8
+          %1 = OpExtInstImport "OpenCL.std"
+               OpMemoryModel Physical64 OpenCL
+               OpEntryPoint Kernel %2 "main"
+                    %4 = OpString "$DIR/kernel_printf_vector.rs"
+                                             OpName %bstr__ByteStr "bstr::ByteStr"
+               OpName %kernel_printf_vector__main "kernel_printf_vector::main"
+               OpName %spirv_std__debug_printf__assert_is_vector___f32__glam__f32__scalar__vec4__Vec4__4_ "spirv_std::debug_printf::assert_is_vector::<f32, glam::f32::scalar::vec4::Vec4, 4>"
+       %void = OpTypeVoid
+          %9 = OpTypeFunction %void
+        %f32 = OpTypeFloat 32
+      %v4f32 = OpTypeVector %f32 4
+      %f32_1 = OpConstant %f32 1
+      %f32_2 = OpConstant %f32 2
+      %f32_3 = OpConstant %f32 3
+      %f32_4 = OpConstant %f32 4
+         %16 = OpTypeFunction %v4f32 %v4f32
+        %u32 = OpTypeInt 32 0
+%bstr__ByteStr = OpTypeInt 8 0
+      %u32_6 = OpConstant %u32 6
+         %19 = OpTypeArray %bstr__ByteStr %u32_6
+%_ptr_UniformConstant_19 = OpTypePointer UniformConstant %19
+%bstr__ByteStr_37 = OpConstant %bstr__ByteStr 37
+%bstr__ByteStr_118 = OpConstant %bstr__ByteStr 118
+%bstr__ByteStr_52 = OpConstant %bstr__ByteStr 52
+%bstr__ByteStr_102 = OpConstant %bstr__ByteStr 102
+%bstr__ByteStr_10 = OpConstant %bstr__ByteStr 10
+%bstr__ByteStr_0 = OpConstant %bstr__ByteStr 0
+         %27 = OpConstantComposite %19 %bstr__ByteStr_37 %bstr__ByteStr_118 %bstr__ByteStr_52 %bstr__ByteStr_102 %bstr__ByteStr_10 %bstr__ByteStr_0
+         %28 = OpVariable %_ptr_UniformConstant_19 UniformConstant %27

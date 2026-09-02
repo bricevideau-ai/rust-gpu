@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -Ctarget-feature=+FragmentFullyCoveredEXT,+ext:SPV_EXT_fragment_fully_covered
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::spirv;
 

@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Test all trailing and leading zeros. No need to test ones, they just call the zero variant with !value
 
 // build-pass

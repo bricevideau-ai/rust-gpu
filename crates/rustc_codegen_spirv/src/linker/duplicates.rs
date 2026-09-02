@@ -1,7 +1,7 @@
 use crate::custom_insts::{self, CustomOp};
 use rspirv::binary::Assemble;
 use rspirv::dr::{Instruction, Module, Operand};
-use rspirv::spirv::{Op, Word};
+use rspirv::spirv::{Decoration, Op, Word};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::bug;
 use smallvec::SmallVec;
@@ -75,33 +75,48 @@ fn make_annotation_key(inst: &Instruction) -> Vec<u32> {
     data
 }
 
-fn gather_annotations(annotations: &[Instruction]) -> FxHashMap<Word, Vec<u32>> {
+fn gather_annotations(annotations: &[Instruction]) -> (FxHashMap<Word, Vec<u32>>, FxHashSet<Word>) {
     let mut map = FxHashMap::default();
+    // IDs that carry an `OpDecorate _ BuiltIn _` decoration. Returned
+    // alongside the annotation-key map so `make_dedupe_key` can omit
+    // the debug name when deduping these variables — see the comment
+    // there for the rationale.
+    let mut builtin_ids = FxHashSet::default();
     for inst in annotations {
         match inst.class.opcode {
             Op::Decorate
             | Op::DecorateId
             | Op::DecorateString
             | Op::MemberDecorate
-            | Op::MemberDecorateString => match map.entry(inst.operands[0].id_ref_any().unwrap()) {
-                hash_map::Entry::Vacant(entry) => {
-                    entry.insert(vec![make_annotation_key(inst)]);
+            | Op::MemberDecorateString => {
+                let target = inst.operands[0].id_ref_any().unwrap();
+                match map.entry(target) {
+                    hash_map::Entry::Vacant(entry) => {
+                        entry.insert(vec![make_annotation_key(inst)]);
+                    }
+                    hash_map::Entry::Occupied(mut entry) => {
+                        entry.get_mut().push(make_annotation_key(inst));
+                    }
                 }
-                hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().push(make_annotation_key(inst));
+                if inst.class.opcode == Op::Decorate
+                    && inst.operands[1].unwrap_decoration() == Decoration::BuiltIn
+                {
+                    builtin_ids.insert(target);
                 }
-            },
+            }
             _ => {}
         }
     }
-    map.into_iter()
+    let key_map = map
+        .into_iter()
         .map(|(key, mut value)| {
             (key, {
                 value.sort();
                 value.concat()
             })
         })
-        .collect()
+        .collect();
+    (key_map, builtin_ids)
 }
 
 fn gather_names(debug_names: &[Instruction]) -> FxHashMap<Word, String> {
@@ -122,6 +137,7 @@ fn make_dedupe_key(
     unresolved_forward_pointers: &FxHashSet<Word>,
     annotations: &FxHashMap<Word, Vec<u32>>,
     names: &FxHashMap<Word, String>,
+    builtin_ids: &FxHashSet<Word>,
 ) -> Vec<u32> {
     let mut data = vec![inst.class.opcode as u32];
 
@@ -149,8 +165,21 @@ fn make_dedupe_key(
             data.extend_from_slice(annos);
         }
         if inst.class.opcode == Op::Variable {
-            // Names only matter for OpVariable.
-            if let Some(name) = names.get(&id) {
+            // Names only matter for OpVariable — with one exception:
+            // BuiltIn variables (e.g. `GlobalInvocationId`) emitted
+            // by entry-point codegen get one global per entry-point
+            // parameter, each with a distinct debug name like
+            // `__spirv_BuiltInGlobalInvocationId` / `...InvocationId.2`.
+            // Including the name here defeats deduplication and the
+            // module ends up with multiple module-scope externals
+            // sharing the same `BuiltIn` decoration — which strict
+            // `LLVM` backends (e.g. pocl 2.13+) reject as "external
+            // global without external or weak linkage." Omitting the
+            // name for BuiltIn-decorated variables collapses them
+            // into the single shared global the consumers expect.
+            if !builtin_ids.contains(&id)
+                && let Some(name) = names.get(&id)
+            {
                 // Jump through some hoops to shove a String into a Vec<u32>.
                 //
                 // FIXME(eddyb) this should `.assemble_into(&mut data)` the
@@ -197,7 +226,7 @@ pub fn remove_duplicate_types(module: &mut Module) {
     let mut unresolved_forward_pointers = FxHashSet::default();
 
     // Collect a map from type ID to an annotation "key blob" (to append to the type key)
-    let annotations = gather_annotations(&module.annotations);
+    let (annotations, builtin_ids) = gather_annotations(&module.annotations);
     let names = gather_names(&module.debug_names);
 
     for inst in &mut module.types_global_values {
@@ -222,7 +251,13 @@ pub fn remove_duplicate_types(module: &mut Module) {
         // all_inst_iter_mut pass below. However, the code is a lil bit cleaner this way I guess.
         rewrite_inst_with_rules(inst, &rewrite_rules);
 
-        let key = make_dedupe_key(inst, &unresolved_forward_pointers, &annotations, &names);
+        let key = make_dedupe_key(
+            inst,
+            &unresolved_forward_pointers,
+            &annotations,
+            &names,
+            &builtin_ids,
+        );
 
         match key_to_result_id.entry(key) {
             hash_map::Entry::Vacant(entry) => {
@@ -553,5 +588,221 @@ impl DebuginfoDeduplicator {
                 .instructions
                 .retain(|inst| inst.class.opcode != Op::Nop);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rspirv::dr::Operand;
+    use rspirv::spirv::StorageClass;
+
+    /// Build the four-instruction set typical of a per-entry-point
+    /// `BuiltIn` global emitted by codegen: an `OpName` debug
+    /// instruction, an `OpDecorate _ BuiltIn _` decoration, and an
+    /// `OpVariable Input`. The `id` parameter avoids result-id
+    /// collisions between the two variables we compare.
+    fn builtin_variable(
+        id: Word,
+        type_id: Word,
+        name: &str,
+        builtin: rspirv::spirv::BuiltIn,
+    ) -> (Instruction, Instruction, Instruction) {
+        let op_name = Instruction::new(
+            Op::Name,
+            None,
+            None,
+            vec![Operand::IdRef(id), Operand::LiteralString(name.into())],
+        );
+        let op_decorate = Instruction::new(
+            Op::Decorate,
+            None,
+            None,
+            vec![
+                Operand::IdRef(id),
+                Operand::Decoration(Decoration::BuiltIn),
+                Operand::BuiltIn(builtin),
+            ],
+        );
+        let op_variable = Instruction::new(
+            Op::Variable,
+            Some(type_id),
+            Some(id),
+            vec![Operand::StorageClass(StorageClass::Input)],
+        );
+        (op_name, op_decorate, op_variable)
+    }
+
+    /// Regression test for the duplicate-`BuiltIn`-globals bug:
+    /// entry-point codegen emits one module-scope `OpVariable Input`
+    /// per kernel parameter for `SPIR-V` builtins, so two kernels in
+    /// the same module both using `#[spirv(global_invocation_id)]`
+    /// produce two `Input` variables that are identical apart from
+    /// their `OpName` (`__spirv_BuiltInGlobalInvocationId` vs
+    /// `…GlobalInvocationId_2`). Strict `LLVM`-based `OpenCL` consumers
+    /// (e.g. pocl 2.13) reject the merged module as "Global is
+    /// external, but doesn't have external or weak linkage."
+    ///
+    /// `make_dedupe_key` must therefore produce **the same key** for
+    /// both variables so `remove_duplicate_types` collapses them
+    /// into a single shared global. The fix omits the `OpName` from
+    /// the key when the variable carries a `BuiltIn` decoration.
+    #[test]
+    fn dedupe_key_ignores_name_for_builtin_variables() {
+        let type_id = 1;
+        let (name_a, decorate_a, var_a) = builtin_variable(
+            10,
+            type_id,
+            "__spirv_BuiltInGlobalInvocationId",
+            rspirv::spirv::BuiltIn::GlobalInvocationId,
+        );
+        let (name_b, decorate_b, var_b) = builtin_variable(
+            11,
+            type_id,
+            "__spirv_BuiltInGlobalInvocationId_2",
+            rspirv::spirv::BuiltIn::GlobalInvocationId,
+        );
+
+        let (annotations, builtin_ids) = gather_annotations(&[decorate_a, decorate_b]);
+        let names = gather_names(&[name_a, name_b]);
+        let unresolved_forward_pointers = FxHashSet::default();
+
+        let key_a = make_dedupe_key(
+            &var_a,
+            &unresolved_forward_pointers,
+            &annotations,
+            &names,
+            &builtin_ids,
+        );
+        let key_b = make_dedupe_key(
+            &var_b,
+            &unresolved_forward_pointers,
+            &annotations,
+            &names,
+            &builtin_ids,
+        );
+
+        assert!(
+            builtin_ids.contains(&10) && builtin_ids.contains(&11),
+            "both variables should be flagged as BuiltIn-decorated",
+        );
+        assert_eq!(
+            key_a, key_b,
+            "two `BuiltIn GlobalInvocationId` variables differing only in `OpName` \
+             must produce the same dedupe key so `remove_duplicate_types` collapses \
+             them — see the comment in `make_dedupe_key`."
+        );
+    }
+
+    /// Sanity: two variables carrying *different* `BuiltIn`
+    /// decorations (e.g. `GlobalInvocationId` and `LocalInvocationId`)
+    /// must still produce distinct dedupe keys. Omitting the name
+    /// from the key shouldn't accidentally collapse different
+    /// builtins onto one another.
+    #[test]
+    fn dedupe_key_distinguishes_different_builtins() {
+        let type_id = 1;
+        let (name_a, decorate_a, var_a) = builtin_variable(
+            10,
+            type_id,
+            "__spirv_BuiltInGlobalInvocationId",
+            rspirv::spirv::BuiltIn::GlobalInvocationId,
+        );
+        let (name_b, decorate_b, var_b) = builtin_variable(
+            11,
+            type_id,
+            "__spirv_BuiltInLocalInvocationId",
+            rspirv::spirv::BuiltIn::LocalInvocationId,
+        );
+
+        let (annotations, builtin_ids) = gather_annotations(&[decorate_a, decorate_b]);
+        let names = gather_names(&[name_a, name_b]);
+        let unresolved_forward_pointers = FxHashSet::default();
+
+        let key_a = make_dedupe_key(
+            &var_a,
+            &unresolved_forward_pointers,
+            &annotations,
+            &names,
+            &builtin_ids,
+        );
+        let key_b = make_dedupe_key(
+            &var_b,
+            &unresolved_forward_pointers,
+            &annotations,
+            &names,
+            &builtin_ids,
+        );
+
+        assert_ne!(
+            key_a, key_b,
+            "different `BuiltIn` decorations must not dedupe; the decoration goes into the key \
+             via the annotation blob from `gather_annotations`."
+        );
+    }
+
+    /// Sanity for the negative side of the change: two non-`BuiltIn`
+    /// variables with the same type and storage class but different
+    /// `OpName`s must continue to produce distinct dedupe keys
+    /// (the original pre-fix behaviour). This is what allows
+    /// distinct module-scope statics to remain separate.
+    #[test]
+    fn dedupe_key_keeps_names_for_non_builtin_variables() {
+        let type_id = 1;
+        let name_a = Instruction::new(
+            Op::Name,
+            None,
+            None,
+            vec![Operand::IdRef(10), Operand::LiteralString("first".into())],
+        );
+        let name_b = Instruction::new(
+            Op::Name,
+            None,
+            None,
+            vec![Operand::IdRef(11), Operand::LiteralString("second".into())],
+        );
+        let var_a = Instruction::new(
+            Op::Variable,
+            Some(type_id),
+            Some(10),
+            vec![Operand::StorageClass(StorageClass::Private)],
+        );
+        let var_b = Instruction::new(
+            Op::Variable,
+            Some(type_id),
+            Some(11),
+            vec![Operand::StorageClass(StorageClass::Private)],
+        );
+
+        // No decorations → no BuiltIn flagging.
+        let (annotations, builtin_ids) = gather_annotations(&[]);
+        let names = gather_names(&[name_a, name_b]);
+        let unresolved_forward_pointers = FxHashSet::default();
+
+        assert!(
+            builtin_ids.is_empty(),
+            "no BuiltIn decorations were added; the set must be empty",
+        );
+
+        let key_a = make_dedupe_key(
+            &var_a,
+            &unresolved_forward_pointers,
+            &annotations,
+            &names,
+            &builtin_ids,
+        );
+        let key_b = make_dedupe_key(
+            &var_b,
+            &unresolved_forward_pointers,
+            &annotations,
+            &names,
+            &builtin_ids,
+        );
+
+        assert_ne!(
+            key_a, key_b,
+            "non-`BuiltIn` variables with distinct names must keep their original \
+             do-not-dedupe behaviour — the fix is scoped to BuiltIn-decorated globals only."
+        );
     }
 }

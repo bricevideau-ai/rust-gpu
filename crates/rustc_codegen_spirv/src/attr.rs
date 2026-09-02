@@ -4,7 +4,7 @@
 
 use crate::codegen_cx::CodegenCx;
 use crate::symbols::Symbols;
-use rspirv::spirv::{BuiltIn, ExecutionMode, ExecutionModel, StorageClass};
+use rspirv::spirv::{AccessQualifier, BuiltIn, ExecutionMode, ExecutionModel, StorageClass};
 use rustc_ast::{LitKind, MetaItemInner, MetaItemLit};
 use rustc_hir as hir;
 use rustc_hir::def_id::LocalModDefId;
@@ -101,6 +101,11 @@ pub enum SpirvAttribute {
     Invariant,
     InputAttachmentIndex(u32),
     SpecConstant(SpecConstant),
+    /// Explicit `OpTypeImage` access qualifier on a Kernel entry-point
+    /// image parameter — overrides the default that's derived from
+    /// `& vs &mut` mutability. Ignored for non-Kernel execution models
+    /// (Vulkan/Shader don't carry the qualifier the same way).
+    ImageAccess(AccessQualifier),
 
     // `fn`/closure attributes:
     BufferLoadIntrinsic,
@@ -138,6 +143,7 @@ pub struct AggregatedSpirvAttributes {
     pub per_primitive_ext: Option<Spanned<()>>,
     pub input_attachment_index: Option<Spanned<u32>>,
     pub spec_constant: Option<Spanned<SpecConstant>>,
+    pub image_access: Option<Spanned<AccessQualifier>>,
 
     // `fn`/closure attributes:
     pub buffer_load_intrinsic: Option<Spanned<()>>,
@@ -243,6 +249,12 @@ impl AggregatedSpirvAttributes {
                 span,
                 "#[spirv(spec_constant)]",
             ),
+            ImageAccess(value) => try_insert(
+                &mut self.image_access,
+                value,
+                span,
+                "#[spirv(image_access)]",
+            ),
             BufferLoadIntrinsic => try_insert(
                 &mut self.buffer_load_intrinsic,
                 (),
@@ -335,7 +347,8 @@ impl CheckSpirvAttrVisitor<'_> {
                 | SpirvAttribute::Invariant
                 | SpirvAttribute::PerPrimitiveExt
                 | SpirvAttribute::InputAttachmentIndex(_)
-                | SpirvAttribute::SpecConstant(_) => match target {
+                | SpirvAttribute::SpecConstant(_)
+                | SpirvAttribute::ImageAccess(_) => match target {
                     Target::Param => {
                         let parent_hir_id = self.tcx.parent_hir_id(hir_id);
                         let parent_is_entry_point = parse_attrs(self.tcx.hir_attrs(parent_hir_id))
@@ -639,6 +652,8 @@ fn parse_spirv_attr<'a>(
                 SpirvAttribute::InputAttachmentIndex(parse_attr_int_value(arg)?)
             } else if arg.has_name(sym.spec_constant) {
                 SpirvAttribute::SpecConstant(parse_spec_constant_attr(sym, arg)?)
+            } else if arg.has_name(sym.image_access) {
+                SpirvAttribute::ImageAccess(parse_image_access_attr(arg)?)
             } else {
                 let name = match arg.ident() {
                     Some(i) => i,
@@ -698,6 +713,42 @@ fn parse_spec_constant_attr(
         // to be set later
         array_count: None,
     })
+}
+
+fn parse_image_access_attr(arg: &MetaItemInner) -> Result<AccessQualifier, ParseAttrError> {
+    let arg = match arg.meta_item() {
+        Some(arg) => arg,
+        None => return Err((arg.span(), "attribute must have value".to_string())),
+    };
+    let lit = match arg.name_value_literal() {
+        Some(lit) => lit,
+        None => {
+            return Err((
+                arg.span,
+                "expected `image_access = \"read_only\"|\"write_only\"|\"read_write\"`".into(),
+            ));
+        }
+    };
+    let s = match &lit.kind {
+        LitKind::Str(sym, _) => sym.as_str(),
+        _ => {
+            return Err((
+                lit.span,
+                "image_access value must be a string literal".into(),
+            ));
+        }
+    };
+    match s {
+        "read_only" => Ok(AccessQualifier::ReadOnly),
+        "write_only" => Ok(AccessQualifier::WriteOnly),
+        "read_write" => Ok(AccessQualifier::ReadWrite),
+        other => Err((
+            lit.span,
+            format!(
+                "unknown image_access `{other}` — expected `read_only`, `write_only`, or `read_write`"
+            ),
+        )),
+    }
 }
 
 fn parse_attr_int_value(arg: &MetaItemInner) -> Result<u32, ParseAttrError> {
@@ -891,6 +942,15 @@ fn parse_entry_attrs(
                         "The `threads` argument must be specified when using `#[spirv(compute)]`, `#[spirv(mesh_nv)]`, `#[spirv(task_nv)]`, `#[spirv(task_ext)]` or `#[spirv(mesh_ext)]`",
                     ),
                 ));
+            }
+        }
+        Kernel => {
+            // OpenCL kernels may optionally specify a local size; if omitted,
+            // the work-group size is set at dispatch time by the host API.
+            if let Some(local_size) = local_size {
+                entry
+                    .execution_modes
+                    .push((LocalSize, ExecutionModeExtra::new(local_size)));
             }
         }
         //TODO: Cover more defaults

@@ -1,4 +1,6 @@
 // build-fail
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use core::num::NonZeroU32;
 use spirv_std::glam::Vec2;

@@ -10,6 +10,8 @@
 // ignore-spv1.3
 // ignore-vulkan1.0
 // ignore-vulkan1.1
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::arch::workgroup_memory_barrier_with_group_sync;
 use spirv_std::glam::*;

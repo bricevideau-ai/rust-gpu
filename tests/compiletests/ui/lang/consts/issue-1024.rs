@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 // Tests that the zombie `bool` from `overflowing_*` (the "has overflowed" value)
 // isn't kept alive by the user's own (unrelated) `bool` constants.
 //

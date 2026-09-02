@@ -13,6 +13,8 @@
 // ignore-spv1.1
 // ignore-spv1.2
 // ignore-spv1.3
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use spirv_std::glam::*;
 use spirv_std::spirv;

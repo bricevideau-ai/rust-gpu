@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "spec_constant_attr"]
 
 // Tests the various forms of `#[spirv(spec_constant)]`.

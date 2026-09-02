@@ -3,7 +3,7 @@ use crate::builder_spirv::SpirvValue;
 use crate::codegen_cx::CodegenCx;
 use indexmap::IndexSet;
 use rspirv::dr::Operand;
-use rspirv::spirv::{Decoration, Dim, ImageFormat, StorageClass, Word};
+use rspirv::spirv::{AccessQualifier, Decoration, Dim, ImageFormat, StorageClass, Word};
 use rustc_abi::{Align, Size};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::span_bug;
@@ -76,6 +76,7 @@ pub enum SpirvType<'tcx> {
         multisampled: u32,
         sampled: u32,
         image_format: ImageFormat,
+        access_qualifier: Option<AccessQualifier>,
     },
     Sampler,
     SampledImage {
@@ -121,7 +122,14 @@ impl SpirvType<'_> {
         let result = match self {
             Self::Void => cx.emit_global().type_void_id(id),
             Self::Bool => cx.emit_global().type_bool_id(id),
-            Self::Integer(width, signed) => cx.emit_global().type_int_id(id, width, signed as u32),
+            Self::Integer(width, signed) => {
+                // OpenCL Kernel capability requires signedness=0 for all OpTypeInt;
+                // sign is encoded in operations (e.g. OpSDiv vs OpUDiv), not types.
+                // We keep signedness in our internal SpirvType for correct codegen
+                // dispatch, but strip it in the emitted SPIR-V when targeting Kernel.
+                let emit_signed = signed && !cx.builder.is_kernel_mode();
+                cx.emit_global().type_int_id(id, width, emit_signed as u32)
+            }
             Self::Float(width) => cx.emit_global().type_float_id(id, width, None),
             Self::Adt {
                 def_id: _,
@@ -134,15 +142,20 @@ impl SpirvType<'_> {
                 let mut emit = cx.emit_global();
                 let result = emit.type_struct_id(id, field_types.iter().cloned());
                 // The struct size is only used in our own sizeof_in_bits() (used in e.g. ArrayStride decoration)
-                for (index, offset) in field_offsets.iter().copied().enumerate() {
-                    emit.member_decorate(
-                        result,
-                        index as u32,
-                        Decoration::Offset,
-                        [Operand::LiteralBit32(offset.bytes() as u32)]
-                            .iter()
-                            .cloned(),
-                    );
+                // MemberDecorate Offset requires the Shader capability. For Kernel
+                // targets (OpenCL), struct layout follows the platform's default
+                // rules (C-style), so explicit offset decorations are not needed.
+                if !cx.builder.is_kernel_mode() {
+                    for (index, offset) in field_offsets.iter().copied().enumerate() {
+                        emit.member_decorate(
+                            result,
+                            index as u32,
+                            Decoration::Offset,
+                            [Operand::LiteralBit32(offset.bytes() as u32)]
+                                .iter()
+                                .cloned(),
+                        );
+                    }
                 }
                 if let Some(field_names) = field_names {
                     for (index, field_name) in field_names.iter().enumerate() {
@@ -195,6 +208,7 @@ impl SpirvType<'_> {
                 multisampled,
                 sampled,
                 image_format,
+                access_qualifier,
             } => cx.emit_global().type_image_id(
                 id,
                 sampled_type,
@@ -204,7 +218,7 @@ impl SpirvType<'_> {
                 multisampled,
                 sampled,
                 image_format,
-                None,
+                access_qualifier,
             ),
             Self::Sampler => cx.emit_global().type_sampler_id(id),
             Self::AccelerationStructureKhr => {
@@ -247,6 +261,11 @@ impl SpirvType<'_> {
     }
 
     fn decorate_array_stride(result: u32, element: u32, cx: &CodegenCx<'_>) {
+        // ArrayStride decoration requires the Shader capability. For Kernel
+        // targets (OpenCL), array layout follows the platform's default rules.
+        if cx.builder.is_kernel_mode() {
+            return;
+        }
         let mut emit = cx.emit_global();
         let ty = cx.lookup_type(element);
         if let Some(element_size) = ty.physical_size(cx) {
@@ -472,6 +491,7 @@ impl SpirvType<'_> {
                 multisampled,
                 sampled,
                 image_format,
+                access_qualifier,
             } => SpirvType::Image {
                 sampled_type,
                 dim,
@@ -480,6 +500,7 @@ impl SpirvType<'_> {
                 multisampled,
                 sampled,
                 image_format,
+                access_qualifier,
             },
             SpirvType::Sampler => SpirvType::Sampler,
             SpirvType::SampledImage { image_type } => SpirvType::SampledImage { image_type },
@@ -664,6 +685,7 @@ impl fmt::Debug for SpirvTypePrinter<'_, '_> {
                 multisampled,
                 sampled,
                 image_format,
+                access_qualifier,
             } => f
                 .debug_struct("Image")
                 .field("id", &self.id)
@@ -674,6 +696,7 @@ impl fmt::Debug for SpirvTypePrinter<'_, '_> {
                 .field("multisampled", &multisampled)
                 .field("sampled", &sampled)
                 .field("image_format", &image_format)
+                .field("access_qualifier", &access_qualifier)
                 .finish(),
             SpirvType::Sampler => f.debug_struct("Sampler").field("id", &self.id).finish(),
             SpirvType::SampledImage { image_type } => f
@@ -833,6 +856,7 @@ impl SpirvTypePrinter<'_, '_> {
                 multisampled,
                 sampled,
                 image_format,
+                access_qualifier,
             } => f
                 .debug_struct("Image")
                 .field("sampled_type", &self.cx.debug_type(sampled_type))
@@ -842,6 +866,7 @@ impl SpirvTypePrinter<'_, '_> {
                 .field("multisampled", &multisampled)
                 .field("sampled", &sampled)
                 .field("image_format", &image_format)
+                .field("access_qualifier", &access_qualifier)
                 .finish(),
             SpirvType::Sampler => f.write_str("Sampler"),
             SpirvType::SampledImage { image_type } => f

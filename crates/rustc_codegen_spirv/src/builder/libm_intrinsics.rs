@@ -3,8 +3,11 @@ use crate::maybe_pqp_cg_ssa as rustc_codegen_ssa;
 
 use super::Builder;
 use crate::builder_spirv::{SpirvValue, SpirvValueExt};
-use rspirv::spirv::{GlslStd450Op as GLOp, Word};
+use crate::spirv_type::SpirvType;
+use rspirv::dr::{InsertPoint, Instruction, Operand};
+use rspirv::spirv::{GlslStd450Op as GLOp, Op, StorageClass, Word};
 use rustc_codegen_ssa::traits::BuilderMethods;
+use std::iter::empty;
 
 #[derive(Copy, Clone, Debug)]
 pub enum LibmCustomIntrinsic {
@@ -266,19 +269,39 @@ impl Builder<'_, '_> {
                 self.fsub(exp, one)
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Erf) => {
-                self.undef_zombie(result_type, "Erf not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(18, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "Erf not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Erfc) => {
-                self.undef_zombie(result_type, "Erfc not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(17, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "Erfc not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Fdim) => {
-                self.undef_zombie(result_type, "Fdim not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(24, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "Fdim not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Hypot) => {
-                self.undef_zombie(result_type, "Hypot not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(32, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "Hypot not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Ilogb) => {
-                self.undef_zombie(result_type, "Ilogb not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(33, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "Ilogb not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::J0) => {
                 self.undef_zombie(result_type, "J0 not supported yet")
@@ -299,16 +322,32 @@ impl Builder<'_, '_> {
                 self.undef_zombie(result_type, "Yn not supported yet")
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Lgamma) => {
-                self.undef_zombie(result_type, "Lgamma not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(35, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "Lgamma not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::LgammaR) => {
-                self.undef_zombie(result_type, "LgammaR not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op_with_ptr_out(36, args, result_type)
+                } else {
+                    self.undef_zombie(result_type, "LgammaR not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Tgamma) => {
-                self.undef_zombie(result_type, "Tgamma not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(65, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "Tgamma not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::NextAfter) => {
-                self.undef_zombie(result_type, "NextAfter not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(47, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "NextAfter not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Powi) => {
                 assert_eq!(args.len(), 2);
@@ -317,14 +356,85 @@ impl Builder<'_, '_> {
                 self.gl_op(GLOp::Pow, result_type, [args[0], float_exp])
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Remainder) => {
-                self.undef_zombie(result_type, "Remainder not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op(51, result_type, args)
+                } else {
+                    self.undef_zombie(result_type, "Remainder not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::RemQuo) => {
-                self.undef_zombie(result_type, "RemQuo not supported yet")
+                if self.cx.builder.is_kernel_mode() {
+                    self.opencl_op_with_ptr_out(52, args, result_type)
+                } else {
+                    self.undef_zombie(result_type, "RemQuo not supported yet")
+                }
             }
             LibmIntrinsic::Custom(LibmCustomIntrinsic::Scalbn) => {
-                self.undef_zombie(result_type, "Scalbn not supported yet")
+                self.gl_op(GLOp::Ldexp, result_type, args)
             }
         }
+    }
+
+    fn opencl_op_with_ptr_out(
+        &mut self,
+        opcode: u32,
+        args: &[SpirvValue],
+        result_type: Word,
+    ) -> SpirvValue {
+        let float_ty = args[0].ty;
+        let i32_ty = SpirvType::Integer(32, false).def(self.span(), self);
+        let ptr_ty = self.type_ptr_to(i32_ty);
+
+        let out_var = {
+            let mut builder = self.emit();
+            builder.select_block(Some(0)).unwrap();
+            let index = {
+                let block = &builder.module_ref().functions[builder.selected_function().unwrap()]
+                    .blocks[builder.selected_block().unwrap()];
+                block
+                    .instructions
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, inst)| {
+                        if inst.class.opcode != Op::Variable {
+                            Some(InsertPoint::FromBegin(index))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(InsertPoint::End)
+            };
+            let result_id = builder.id();
+            let inst = Instruction::new(
+                Op::Variable,
+                Some(ptr_ty),
+                Some(result_id),
+                vec![Operand::StorageClass(StorageClass::Function)],
+            );
+            builder.insert_into_block(index, inst).unwrap();
+            result_id.with_type(ptr_ty)
+        };
+
+        let opencl = self.ext_inst.borrow_mut().import_opencl(self);
+        let mut operands: Vec<Operand> = args.iter().map(|a| Operand::IdRef(a.def(self))).collect();
+        operands.push(Operand::IdRef(out_var.def(self)));
+        let primary = self
+            .emit()
+            .ext_inst(float_ty, None, opencl, opcode, operands)
+            .unwrap()
+            .with_type(float_ty);
+        let secondary = self
+            .emit()
+            .load(i32_ty, None, out_var.def(self), None, empty())
+            .unwrap()
+            .with_type(i32_ty);
+        self.emit()
+            .composite_construct(
+                result_type,
+                None,
+                [primary.def(self), secondary.def(self)].iter().copied(),
+            )
+            .unwrap()
+            .with_type(result_type)
     }
 }

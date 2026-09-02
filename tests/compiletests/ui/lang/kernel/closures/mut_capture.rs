@@ -1,0 +1,24 @@
+// build-pass
+// ignore-vulkan1.1
+// ignore-vulkan1.2
+// ignore-vulkan1.3
+// ignore-vulkan1.4
+// ignore-spv1.3
+// ignore-spv1.4
+// ignore-spv1.5
+// ignore-spv1.6
+
+use spirv_std::spirv;
+
+#[spirv(kernel)]
+pub fn main(#[spirv(cross_workgroup)] out: &mut u32, n: u32) {
+    let mut count = 0u32;
+    let mut counter = |_: u32| {
+        count += 1;
+        count
+    };
+    for i in 0..n {
+        counter(i);
+    }
+    *out = count;
+}

@@ -1,5 +1,7 @@
 // build-pass
 // compile-flags: -Ctarget-feature=+StorageImageExtendedFormats
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use glam::{Vec2, Vec3, Vec4};
 use spirv_std::spirv;

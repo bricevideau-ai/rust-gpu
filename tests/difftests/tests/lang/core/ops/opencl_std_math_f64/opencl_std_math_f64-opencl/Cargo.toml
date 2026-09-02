@@ -1,0 +1,17 @@
+[package]
+name = "opencl_std_math_f64-opencl"
+edition.workspace = true
+
+[lints]
+workspace = true
+
+# Common deps
+[dependencies]
+spirv-std.workspace = true
+opencl_std_math_f64-shared = { path = "../opencl_std_math_f64-shared" }
+
+# CPU deps
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+difftest.workspace = true
+bytemuck.workspace = true
+spirv-builder.workspace = true

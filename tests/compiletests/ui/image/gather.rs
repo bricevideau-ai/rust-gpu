@@ -1,5 +1,7 @@
 // Test `OpImageGather`
 // build-pass
+// ignore-opencl1.2
+// ignore-opencl2.0
 
 use core::arch::asm;
 use spirv_std::spirv;

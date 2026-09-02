@@ -23,6 +23,12 @@ jobs:
       matrix:
         os: [ ubuntu-latest, windows-latest, macOS-latest ]
     runs-on: ${{ matrix.os }}
+    env:
+      # See `difftest` job below for the rationale; setting it
+      # job-wide so any OpenCL-runner step in this job (added in
+      # later commits of the series) picks up rusticl on llvmpipe.
+      # No effect on Windows / macOS runners.
+      RUSTICL_ENABLE: llvmpipe
     steps:
       - uses: actions/checkout@v6
       - name: Install Vulkan SDK
@@ -37,6 +43,15 @@ jobs:
       - if: ${{ runner.os == 'Linux' }}
         name: Linux - Install native dependencies
         run: sudo apt install libwayland-cursor0 libxkbcommon-dev libwayland-dev
+      - if: ${{ runner.os == 'Linux' }}
+        name: Install rusticl OpenCL ICD
+        run: |
+          sudo apt-get update -y -qq
+          # `kisak-mesa` ships the rusticl OpenCL ICD via
+          # `mesa-opencl-icd`; the older `kisak/turtle` PPA does not.
+          sudo add-apt-repository ppa:kisak/kisak-mesa -y
+          sudo apt-get update
+          sudo apt install -y mesa-opencl-icd
       # just need a random command that forces the installation of rust-toolchain
       # figure out native target triple while we're at it
       - name: install rust-toolchain
@@ -67,6 +82,21 @@ jobs:
       # Examples
       - name: cargo check examples
         run: cargo check -p example-runner-ash -p example-runner-wgpu -p example-runner-cpu -p compute-shader -p mouse-shader -p simplest-shader -p sky-shader --no-default-features --features "use-installed-tools"
+      - name: cargo check opencl
+        run: cargo check -p example-runner-opencl-builder -p example-runner-opencl -p kernel-shader --no-default-features --features "use-installed-tools"
+
+      - name: build OpenCL kernel shader
+        run: cargo run -p example-runner-opencl-builder --release --no-default-features --features "use-installed-tools"
+
+      - if: ${{ runner.os == 'Linux' }}
+        name: run OpenCL example runner
+        # Builds + executes every kernel section in `example-runner-opencl`
+        # against the rusticl / llvmpipe device installed in the
+        # "Install rusticl OpenCL ICD" step above. Linux-only because
+        # Windows / macOS CI runners don't have rusticl installed (the
+        # runner's `OclContext::new` would fail on `clGetPlatformIDs`
+        # rather than skip gracefully).
+        run: cargo run -p example-runner-opencl --release --no-default-features --features "use-installed-tools"
 
       - name: build example shaders
         env:
@@ -186,6 +216,10 @@ jobs:
         run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env spv1.5
       - name: compiletest spv1.6
         run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env spv1.6
+      - name: compiletest opencl1.2
+        run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env opencl1.2
+      - name: compiletest opencl2.0
+        run: cargo run -p compiletests --release --no-default-features --features "use-installed-tools" -- --target-env opencl2.0
 
   difftest:
     name: Difftest
@@ -194,6 +228,15 @@ jobs:
       matrix:
         os: [ ubuntu-latest, windows-latest, macOS-latest ]
     runs-on: ${{ matrix.os }}
+    env:
+      # Enable the llvmpipe back-end of rusticl on Linux runners,
+      # where the `mesa-opencl-icd` package below installs rusticl as
+      # the system's OpenCL ICD. Lets the OpenCL difftest backend
+      # (`tests/difftests/tests/lib/src/scaffold/compute/opencl.rs`)
+      # find a SPIR-V-capable device and exercise the `-opencl`
+      # variants instead of silently skipping. No effect on
+      # Windows / macOS runners where rusticl isn't installed.
+      RUSTICL_ENABLE: llvmpipe
     steps:
       - uses: actions/checkout@v6
       - name: Install Vulkan SDK
@@ -209,12 +252,14 @@ jobs:
         name: Linux - Install native dependencies
         run: sudo apt install libwayland-cursor0 libxkbcommon-dev libwayland-dev
       - if: ${{ runner.os == 'Linux' }}
-        name: Install xvfb, llvmpipe and lavapipe
+        name: Install xvfb, llvmpipe, lavapipe and rusticl OpenCL ICD
         run: |
           sudo apt-get update -y -qq
-          sudo add-apt-repository ppa:kisak/turtle -y
+          # `kisak-mesa` ships the rusticl OpenCL ICD via
+          # `mesa-opencl-icd`; the older `kisak/turtle` PPA does not.
+          sudo add-apt-repository ppa:kisak/kisak-mesa -y
           sudo apt-get update
-          sudo apt install -y xvfb libgl1-mesa-dri libxcb-xfixes0-dev mesa-vulkan-drivers
+          sudo apt install -y xvfb libgl1-mesa-dri libxcb-xfixes0-dev mesa-vulkan-drivers mesa-opencl-icd
       - name: install rust-toolchain
         run: echo "TARGET=$(rustc --print host-tuple)" >> "$GITHUB_ENV"
       - name: install nextest

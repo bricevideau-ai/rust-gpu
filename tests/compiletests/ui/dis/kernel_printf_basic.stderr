@@ -1,0 +1,26 @@
+               OpCapability Addresses
+               OpCapability Kernel
+               OpCapability Vector16
+               OpCapability Float16Buffer
+               OpCapability Int8
+          %1 = OpExtInstImport "OpenCL.std"
+               OpMemoryModel Physical64 OpenCL
+               OpEntryPoint Kernel %2 "main"
+          %3 = OpString "$DIR/kernel_printf_basic.rs"
+                              OpName %bstr__ByteStr "bstr::ByteStr"
+               OpName %kernel_printf_basic__main "kernel_printf_basic::main"
+       %void = OpTypeVoid
+          %7 = OpTypeFunction %void
+        %u32 = OpTypeInt 32 0
+%bstr__ByteStr = OpTypeInt 8 0
+      %u32_7 = OpConstant %u32 7
+         %10 = OpTypeArray %bstr__ByteStr %u32_7
+%_ptr_UniformConstant_10 = OpTypePointer UniformConstant %10
+%bstr__ByteStr_104 = OpConstant %bstr__ByteStr 104
+%bstr__ByteStr_101 = OpConstant %bstr__ByteStr 101
+%bstr__ByteStr_108 = OpConstant %bstr__ByteStr 108
+%bstr__ByteStr_111 = OpConstant %bstr__ByteStr 111
+%bstr__ByteStr_10 = OpConstant %bstr__ByteStr 10
+%bstr__ByteStr_0 = OpConstant %bstr__ByteStr 0
+         %18 = OpConstantComposite %10 %bstr__ByteStr_104 %bstr__ByteStr_101 %bstr__ByteStr_108 %bstr__ByteStr_108 %bstr__ByteStr_111 %bstr__ByteStr_10 %bstr__ByteStr_0
+         %19 = OpVariable %_ptr_UniformConstant_10 UniformConstant %18

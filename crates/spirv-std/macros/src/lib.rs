@@ -70,12 +70,15 @@
 // #![allow()]
 #![doc = include_str!("../README.md")]
 
+mod cl_swizzle;
 mod debug_printf;
 mod image;
+mod opencl_printf;
 mod sample_param_permutations;
 mod scalar_or_vector_composite;
 
 use crate::debug_printf::{DebugPrintfInput, debug_printf_inner};
+use crate::opencl_printf::opencl_printf_inner;
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Group, Ident, TokenTree};
 use quote::{ToTokens, TokenStreamExt, format_ident, quote};
@@ -315,6 +318,36 @@ pub fn debug_printfln(input: TokenStream) -> TokenStream {
     debug_printf_inner(input)
 }
 
+/// Print a formatted string using the `OpenCL` `printf` extended instruction.
+///
+/// This uses `OpExtInst` with the `OpenCL.std` instruction set (opcode 184),
+/// which is the standard `printf` for `OpenCL` Kernel execution model.
+/// The format string is encoded as a null-terminated byte array in
+/// `UniformConstant` storage, matching the output of clang/llvm-spirv.
+///
+/// Examples:
+///
+/// ```rust,ignore
+/// printf!("hello from work item %d\n", id);
+/// printf!("value = %f, index = %u\n", val, idx);
+/// ```
+///
+/// Format specifiers follow the `OpenCL` C `printf` rules:
+/// `%d`/`%i` (i32), `%u` (u32), `%f` (f32), `%x`/`%X` (u32 hex),
+/// `%lu`/`%lx` (u64), `%v2f`/`%v3d`/`%v4u` (vectors).
+#[proc_macro]
+pub fn printf(input: TokenStream) -> TokenStream {
+    opencl_printf_inner(syn::parse_macro_input!(input as DebugPrintfInput))
+}
+
+/// Similar to `printf` but appends a newline to the format string.
+#[proc_macro]
+pub fn printfln(input: TokenStream) -> TokenStream {
+    let mut input = syn::parse_macro_input!(input as DebugPrintfInput);
+    input.format_string.push('\n');
+    opencl_printf_inner(input)
+}
+
 /// Generates permutations of an `ImageWithMethods` implementation containing sampling functions
 /// that have asm instruction ending with a placeholder `$PARAMS` operand. The last parameter
 /// of each function must be named `params`, its type will be rewritten. Relevant generic
@@ -331,4 +364,25 @@ pub fn derive_scalar_or_vector_composite(item: TokenStream) -> TokenStream {
     scalar_or_vector_composite::derive(item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// `OpenCL`-spec swizzle for `spirv_std::cl::*` vector types.
+///
+/// Two forms after the source expression:
+///
+/// ```ignore
+/// use spirv_std::cl::{Float4, s};
+/// let v: Float4 = /* ... */;
+/// let _: Float2 = s!(v, xy);     // letter form: x|y|z|w, widths 1-4
+/// let _: f32    = s!(v, x);      // single index returns the scalar
+/// let _: Float4 = s!(v, sFEDC);  // sN form: hex digits 0-9a-f, all widths
+/// let _: Float4 = s!(v, s0_1_0_1); // underscores ignored
+/// ```
+///
+/// Result widths must be in `{1, 2, 3, 4, 8, 16}`. Letter form indices
+/// must be in `{0, 1, 2, 3}`; sN-form indices may be any hex digit but
+/// must be < the source vector's width (validated at SPIR-V time).
+#[proc_macro]
+pub fn cl_swizzle(input: TokenStream) -> TokenStream {
+    cl_swizzle::cl_swizzle_inner(syn::parse_macro_input!(input as cl_swizzle::SwizzleInput))
 }

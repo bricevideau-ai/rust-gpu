@@ -1,3 +1,5 @@
+// ignore-opencl1.2
+// ignore-opencl2.0
 #![crate_name = "panic_sequential_many"]
 
 // Test a long sequence of conditional panics, which has historically generated
